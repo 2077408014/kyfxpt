@@ -10,7 +10,7 @@
           <span>首页</span>
         </el-menu-item>
         <el-menu-item index="/dashboard/mistakes">
-          <el-icon><DocumentError /></el-icon>
+          <el-icon><DocumentDelete /></el-icon>
           <span>错题管理</span>
         </el-menu-item>
         <el-menu-item index="/dashboard/recommend">
@@ -26,7 +26,7 @@
           <span>单词背诵</span>
         </el-menu-item>
         <el-menu-item index="/dashboard/ai">
-          <el-icon><Robot /></el-icon>
+          <el-icon><Service /></el-icon>
           <span>AI问答</span>
         </el-menu-item>
       </el-menu>
@@ -57,11 +57,11 @@ import { getMe } from '../api/auth'
 import { ElMessage } from 'element-plus'
 import {
   HomeFilled,
-  DocumentError,
+  DocumentDelete,
   TrendCharts,
   FolderOpened,
   Reading,
-  Robot,
+  Service,
   Bell
 } from '@element-plus/icons-vue'
 

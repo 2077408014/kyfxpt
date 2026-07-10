@@ -3,7 +3,7 @@
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-icon mistake-icon">
-          <el-icon><DocumentError /></el-icon>
+          <el-icon><DocumentDelete /></el-icon>
         </div>
         <div class="stat-info">
           <p class="stat-value">{{ mistakeCount }}</p>
@@ -50,7 +50,7 @@
           开始复习
         </el-button>
         <el-button type="warning" @click="$router.push('/dashboard/words')">
-          <el-icon><BookOpen /></el-icon>
+          <el-icon><Notebook /></el-icon>
           学习单词
         </el-button>
         <el-button type="info" @click="$router.push('/dashboard/ai')">
@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { DocumentError, Clock, Reading, FolderOpened, Plus, Refresh, BookOpen, Message } from '@element-plus/icons-vue'
+import { DocumentDelete, Clock, Reading, FolderOpened, Plus, Refresh, Notebook, Message } from '@element-plus/icons-vue'
 import { getMistakes, getTodayReviews } from '../api/mistakes'
 
 const mistakeCount = ref(0)

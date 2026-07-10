@@ -5,7 +5,7 @@
         <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
           <div class="avatar">
             <el-icon v-if="msg.role === 'user'"><User /></el-icon>
-            <el-icon v-else><Robot /></el-icon>
+            <el-icon v-else><Service /></el-icon>
           </div>
           <div class="content">
             <p>{{ msg.content }}</p>
@@ -46,7 +46,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Robot } from '@element-plus/icons-vue'
+import { User, Service } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const messages = ref<any[]>([
