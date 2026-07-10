@@ -76,9 +76,11 @@ onMounted(async () => {
     const me = await getMe()
     store.setUser(me)
     user.value = me
-  } catch {
-    store.logout()
-    router.push('/login')
+  } catch (error: any) {
+    if (error.response?.status === 401) {
+      store.logout()
+      router.push('/login')
+    }
   }
 })
 

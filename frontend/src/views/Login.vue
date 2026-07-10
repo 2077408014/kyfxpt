@@ -53,7 +53,7 @@ async function handleLogin() {
     try {
       const response = await login(form)
       store.setToken(response.access_token)
-      router.push('/dashboard')
+      await router.push('/dashboard')
       ElMessage.success('登录成功')
     } catch (error: any) {
       ElMessage.error(error.response?.data?.detail || '登录失败')
