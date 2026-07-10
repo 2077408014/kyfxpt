@@ -8,12 +8,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.4.0",
-    "vue-router": "^4.2.5",
-    "pinia": "^2.1.7",
-    "element-plus": "^2.5.0",
+    "axios": "^1.18.1",
     "echarts": "^5.4.3",
-    "axios": "^1.6.5"
+    "element-plus": "^2.5.0",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.5"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -21,5 +21,9 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.0",
     "vue-tsc": "^1.8.27"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true,
+    "vue-demi@0.14.10": true
   }
 }
