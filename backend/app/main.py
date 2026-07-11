@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .database import engine, Base
+from .database import engine, Base, migrate_database
 from .routers import auth, mistakes
 from .config import UPLOAD_PATH
 
 Base.metadata.create_all(bind=engine)
+migrate_database()
 
 app = FastAPI(title="考研复习平台", version="1.0.0")
 

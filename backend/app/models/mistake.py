@@ -17,6 +17,7 @@ class Mistake(Base):
     answer = Column(Text, nullable=False)
     analysis = Column(Text, nullable=True)
     error_reason = Column(Text, nullable=True)
+    image_path = Column(String(500), nullable=True)
     next_review_date = Column(Date, nullable=True)
     review_count = Column(Integer, nullable=False, default=0)
     correct_count = Column(Integer, nullable=False, default=0)

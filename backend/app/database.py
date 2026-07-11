@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from .config import settings
@@ -18,3 +18,11 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def migrate_database():
+    with engine.connect() as conn:
+        result = conn.execute(text("PRAGMA table_info(mistakes)"))
+        columns = [row[1] for row in result]
+        if "image_path" not in columns:
+            conn.execute(text("ALTER TABLE mistakes ADD COLUMN image_path VARCHAR(500)"))
+            conn.commit()

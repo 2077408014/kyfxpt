@@ -8,24 +8,29 @@ from ..utils.memory_curve import calculate_next_review_date
 
 class MistakeService:
     def create_mistake(self, db: Session, user_id: int, data: MistakeCreate) -> Mistake:
+        if not data.question_text and not data.image_path:
+            raise ValueError("题目文本和图片至少提供一项")
+
+        difficulty = data.difficulty or "中等"
         next_review_date, _ = calculate_next_review_date(
             current_level="生疏",
-            difficulty=data.difficulty,
+            difficulty=difficulty,
             review_count=0,
             correct_count=0
         )
-        
+
         mistake = Mistake(
             user_id=user_id,
             subject=data.subject,
-            knowledge_point=data.knowledge_point,
-            error_type=data.error_type,
-            difficulty=data.difficulty,
+            knowledge_point=data.knowledge_point or "未分类",
+            error_type=data.error_type or "未分类",
+            difficulty=difficulty,
             mastery_level="生疏",
-            question_text=data.question_text,
-            answer=data.answer,
+            question_text=data.question_text or "",
+            answer=data.answer or "",
             analysis=data.analysis,
             error_reason=data.error_reason,
+            image_path=data.image_path,
             next_review_date=next_review_date
         )
         db.add(mistake)
@@ -115,5 +120,37 @@ class MistakeService:
                 Mistake.next_review_date <= today
             )
         ).all()
+
+    def get_similar_mistakes(self, db: Session, user_id: int, mistake_id: int, limit: int = 5) -> list:
+        mistake = self.get_mistake_by_id(db, user_id, mistake_id)
+        if not mistake:
+            return []
+
+        query = db.query(Mistake).filter(
+            and_(
+                Mistake.user_id == user_id,
+                Mistake.id != mistake_id,
+                Mistake.subject == mistake.subject
+            )
+        )
+
+        results = query.all()
+        scored = []
+        for m in results:
+            score = 0.0
+            if m.knowledge_point and mistake.knowledge_point:
+                if m.knowledge_point == mistake.knowledge_point:
+                    score += 0.5
+                elif m.knowledge_point in mistake.knowledge_point or mistake.knowledge_point in m.knowledge_point:
+                    score += 0.3
+            if m.question_text and mistake.question_text:
+                chars1 = set(mistake.question_text[:200])
+                chars2 = set(m.question_text[:200])
+                if chars1 and chars2:
+                    score += len(chars1 & chars2) / len(chars1 | chars2) * 0.5
+            scored.append((m, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [{"mistake": m, "similarity_score": s} for m, s in scored[:limit]]
 
 mistake_service = MistakeService()
