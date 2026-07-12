@@ -4,3 +4,8 @@ from .word import WordResponse, UserWordResponse, WordStudyRequest, StudyPlanReq
 from .resource import ResourceResponse, ResourceSearchRequest
 from .recommendation import RecommendationGenerateRequest, RecommendationResponse, WeakPointResponse
 from .ai import AIChatRequest, AICommandRequest, AIResponse
+from .politics import (
+    PoliticsRecitationCreate, PoliticsRecitationUpdate, PoliticsRecitationResponse,
+    PoliticsRecognizeRequest, PoliticsRecognizeResponse,
+    RecitationReminderCreate, RecitationReminderUpdate, RecitationReminderResponse
+)

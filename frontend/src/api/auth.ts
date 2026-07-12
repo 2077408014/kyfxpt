@@ -16,7 +16,17 @@ export interface User {
   username: string
   email: string
   avatar: string | null
+  ai_api_provider: string | null
+  ai_api_model: string | null
+  ai_api_base_url: string | null
   created_at: string
+}
+
+export interface AIConfig {
+  ai_api_provider?: string
+  ai_api_key?: string
+  ai_api_base_url?: string
+  ai_api_model?: string
 }
 
 export interface TokenResponse {
@@ -25,16 +35,17 @@ export interface TokenResponse {
 }
 
 export async function login(data: LoginData): Promise<TokenResponse> {
-  const response = await axios.post('/auth/login', data)
-  return response.data
+  return await axios.post('/api/auth/login', data)
 }
 
 export async function register(data: RegisterData): Promise<User> {
-  const response = await axios.post('/auth/register', data)
-  return response.data
+  return await axios.post('/api/auth/register', data)
 }
 
 export async function getMe(): Promise<User> {
-  const response = await axios.get('/auth/me')
-  return response.data
+  return await axios.get('/api/auth/me')
+}
+
+export async function updateAIConfig(config: AIConfig): Promise<User> {
+  return await axios.put('/api/auth/ai-config', config)
 }

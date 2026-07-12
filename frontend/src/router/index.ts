@@ -50,6 +50,11 @@ const routes: RouteRecordRaw[] = [
         path: 'ai',
         name: 'AI',
         component: () => import('../views/AIChat.vue')
+      },
+      {
+        path: 'report',
+        name: 'Report',
+        component: () => import('../views/Report.vue')
       }
     ]
   }
@@ -60,7 +65,7 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('token')
   if (to.path !== '/login' && to.path !== '/register' && !token) {
     next('/login')

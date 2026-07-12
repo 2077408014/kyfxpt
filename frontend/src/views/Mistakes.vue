@@ -57,7 +57,7 @@
     <el-dialog title="添加错题" v-model="showAddDialog" width="650px">
       <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-width="100px">
         <el-form-item label="题目图片">
-          <div class="upload-area">
+          <div class="upload-area" @paste="handlePaste">
             <el-upload
               :show-file-list="false"
               :before-upload="handleImageSelect"
@@ -65,10 +65,14 @@
             >
               <div v-if="!addForm.image_path" class="upload-placeholder">
                 <el-icon><Picture /></el-icon>
-                <span>点击上传题目图片</span>
+                <span>点击上传或粘贴题目图片</span>
               </div>
               <div v-else class="image-preview">
-                <img :src="'/uploads/' + addForm.image_path" class="preview-img" />
+                <el-image
+                  :src="'/uploads/' + addForm.image_path + '?t=' + Date.now()"
+                  fit="contain"
+                  class="preview-img"
+                />
                 <el-button size="small" type="danger" @click.stop="removeImage">移除</el-button>
               </div>
             </el-upload>
@@ -296,6 +300,31 @@ async function handleImageSelect(file: File): Promise<boolean> {
     ElMessage.error(error.response?.data?.detail || '图片上传失败')
   }
   return false
+}
+
+async function handlePaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items
+  if (!items) return
+
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      event.preventDefault()
+      const file = item.getAsFile()
+      if (file) {
+        await handleImageSelect(file)
+        return
+      }
+    }
+  }
+
+  const files = event.clipboardData?.files
+  if (files && files.length > 0) {
+    const imageFile = Array.from(files).find(f => f.type.startsWith('image/'))
+    if (imageFile) {
+      event.preventDefault()
+      await handleImageSelect(imageFile)
+    }
+  }
 }
 
 function removeImage() {

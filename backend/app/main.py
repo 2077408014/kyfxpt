@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import engine, Base, migrate_database
-from .routers import auth, mistakes
+from .routers import auth, mistakes, words, politics, recommendation, resources, ai, report
 from .config import UPLOAD_PATH
 
 Base.metadata.create_all(bind=engine)
@@ -22,6 +22,12 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_PATH), name="uploads")
 
 app.include_router(auth.router)
 app.include_router(mistakes.router)
+app.include_router(words.router)
+app.include_router(politics.router)
+app.include_router(recommendation.router)
+app.include_router(resources.router)
+app.include_router(ai.router)
+app.include_router(report.router)
 
 @app.get("/")
 async def root():

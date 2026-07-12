@@ -23,11 +23,15 @@
         </el-menu-item>
         <el-menu-item index="/dashboard/words">
           <el-icon><Reading /></el-icon>
-          <span>单词背诵</span>
+          <span>背诵中心</span>
         </el-menu-item>
         <el-menu-item index="/dashboard/ai">
           <el-icon><Service /></el-icon>
           <span>AI问答</span>
+        </el-menu-item>
+        <el-menu-item index="/dashboard/report">
+          <el-icon><PieChart /></el-icon>
+          <span>学习报告</span>
         </el-menu-item>
       </el-menu>
       <div class="logout">
@@ -44,14 +48,16 @@
           <el-icon><Bell /></el-icon>
         </div>
       </header>
-      <router-view />
+      <div class="content-wrapper">
+        <router-view />
+      </div>
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getMe } from '../api/auth'
 import { ElMessage } from 'element-plus'
@@ -62,11 +68,11 @@ import {
   FolderOpened,
   Reading,
   Service,
-  Bell
+  Bell,
+  PieChart
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
-const route = useRoute()
 const store = useUserStore()
 const user = ref<any>(null)
 const activeMenu = ref('/dashboard')
@@ -145,6 +151,14 @@ function handleLogout() {
   flex-direction: column;
   background: #f5f7fa;
   overflow: hidden;
+  min-height: 0;
+}
+
+.content-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .header {

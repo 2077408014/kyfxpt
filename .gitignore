@@ -18,6 +18,8 @@ build/
 *.log
 
 .env
+.env.test
+.env.llm
 .venv
 
 .DS_Store
@@ -28,3 +30,6 @@ Thumbs.db
 
 uploads/
 indexes/
+
+.worktrees/
+worktrees/

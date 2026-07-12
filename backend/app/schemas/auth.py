@@ -16,10 +16,19 @@ class UserResponse(BaseModel):
     username: str
     email: str
     avatar: Optional[str]
+    ai_api_provider: Optional[str]
+    ai_api_model: Optional[str]
+    ai_api_base_url: Optional[str]
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+class AIConfigUpdate(BaseModel):
+    ai_api_provider: Optional[str]
+    ai_api_key: Optional[str]
+    ai_api_base_url: Optional[str]
+    ai_api_model: Optional[str]
 
 class TokenResponse(BaseModel):
     access_token: str

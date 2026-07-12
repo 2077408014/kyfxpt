@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..schemas.auth import UserCreate, UserLogin, UserResponse, TokenResponse
+from ..schemas.auth import UserCreate, UserLogin, UserResponse, TokenResponse, AIConfigUpdate
 from ..services.auth_service import auth_service
 from ..utils.jwt import decode_access_token
 
@@ -50,3 +50,26 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user = Depends(get_current_user)):
     return current_user
+
+@router.put("/ai-config", response_model=UserResponse)
+async def update_ai_config(
+    config: AIConfigUpdate,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        if config.ai_api_key is not None:
+            current_user.ai_api_key = config.ai_api_key
+        if config.ai_api_base_url is not None:
+            current_user.ai_api_base_url = config.ai_api_base_url
+        if config.ai_api_model is not None:
+            current_user.ai_api_model = config.ai_api_model
+        if config.ai_api_provider is not None:
+            current_user.ai_api_provider = config.ai_api_provider
+        
+        db.commit()
+        db.refresh(current_user)
+        return current_user
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -5,3 +5,4 @@ from .resource import Resource
 from .recommendation import Recommendation, UserWeakPoint
 from .ai_chat import AIChatHistory
 from .study_stat import UserStudyStat
+from .politics import PoliticsRecitation, RecitationReminder
