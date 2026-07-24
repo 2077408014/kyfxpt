@@ -1,8 +1,16 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
+import asyncio
 from ..models.recommendation import Recommendation, UserWeakPoint
 from ..models.mistake import Mistake
 from ..schemas.recommendation import RecommendationCreate, RecommendationComplete
+from ..agents.orchestrator import recommendation_orchestrator
+from ..agents.specialized import register_all_agents
+from ..services.agent_log_service import agent_log_service
+
+
+register_all_agents()
+
 
 PRESET_QUESTIONS = {
     "马原": {
@@ -128,49 +136,307 @@ class RecommendationService:
         
         return result
     
-    def generate_recommendations(self, db: Session, user_id: int, count: int = 5) -> list:
+    async def generate_recommendations(self, db: Session, user_id: int, count: int = 5, subject: str = None) -> list:
         weak_points = self.analyze_weak_points(db, user_id)
         
         recommendations = []
+        
+        mistakes = db.query(Mistake).filter(
+            Mistake.user_id == user_id
+        )
+        
+        if subject:
+            mistakes = mistakes.filter(Mistake.subject == subject)
+        
+        mistakes = mistakes.order_by(Mistake.created_at.desc()).all()
+        
+        for mistake in mistakes[:count]:
+            existing = db.query(Recommendation).filter(
+                Recommendation.user_id == user_id,
+                Recommendation.question_text == mistake.question_text,
+                Recommendation.completed == False
+            ).first()
+            
+            if not existing:
+                recommendations.append({
+                    "question_text": mistake.question_text,
+                    "answer": mistake.answer,
+                    "analysis": mistake.analysis,
+                    "difficulty": mistake.difficulty,
+                    "source": "错题推荐",
+                    "agent_domain": mistake.subject,
+                    "knowledge_point": mistake.knowledge_point,
+                    "confidence": 0.95
+                })
+        
+        remaining_count = count - len(recommendations)
+        
+        if remaining_count > 0:
+            try:
+                ai_recommendations = await self._generate_ai_recommendations(db, user_id, weak_points, remaining_count, subject)
+                recommendations.extend(ai_recommendations)
+            except ValueError as ve:
+                print(f"生成AI推荐题目失败: {ve}")
+        
+        if not recommendations:
+            from ..services.ai_service import ai_service
+            user_config = ai_service._get_user_ai_config(db, user_id)
+            
+            if not user_config["api_key"]:
+                raise ValueError("无法生成推荐题目：请先在AI配置页面设置API Key")
+            
+            if subject:
+                subject_mistakes = db.query(Mistake).filter(Mistake.user_id == user_id, Mistake.subject == subject).count()
+                if subject_mistakes == 0:
+                    raise ValueError(f"无法生成推荐题目：科目「{subject}」暂无错题，请先添加该科目的错题")
+                else:
+                    raise ValueError(f"无法生成推荐题目：科目「{subject}」的题目生成失败，请稍后重试")
+            else:
+                total_mistakes = db.query(Mistake).filter(Mistake.user_id == user_id).count()
+                if total_mistakes == 0:
+                    raise ValueError("无法生成推荐题目：暂无错题，请先添加错题")
+                else:
+                    raise ValueError("无法生成推荐题目：题目生成失败，请稍后重试")
+        
+        db_recommendations = []
+        
+        for rec in recommendations:
+            existing = db.query(Recommendation).filter(
+                Recommendation.user_id == user_id,
+                Recommendation.question_text == rec.get("question_text", ""),
+                Recommendation.completed == False
+            ).first()
+            
+            if not existing:
+                new_rec = Recommendation(
+                    user_id=user_id,
+                    subject=rec.get("agent_domain", rec.get("subject", "未知")),
+                    knowledge_point=rec.get("knowledge_point", rec.get("question_text", "")[:100]) if rec.get("question_text") else "",
+                    difficulty=rec.get("difficulty", "中等"),
+                    question_text=rec.get("question_text", ""),
+                    answer=rec.get("answer", ""),
+                    analysis=rec.get("analysis", ""),
+                    source=rec.get("source", "AI生成"),
+                    result=None,
+                    completed=False
+                )
+                db.add(new_rec)
+                db_recommendations.append(new_rec)
+        
+        db.commit()
+        
+        return [self._to_dict(rec) for rec in db_recommendations]
+    
+    async def _generate_ai_recommendations(self, db: Session, user_id: int, weak_points: list, count: int, subject: str = None) -> list:
+        from ..services.rag_service import rag_service
+        from ..services.ai_service import ai_service
+        
+        recommendations = []
+        
+        filtered_weak_points = weak_points
+        if subject:
+            filtered_weak_points = [wp for wp in weak_points if wp["subject"] == subject]
+        
+        if not filtered_weak_points:
+            if subject:
+                raise ValueError(f"科目「{subject}」暂无薄弱知识点，请先添加该科目的错题")
+            else:
+                raise ValueError("暂无薄弱知识点，请先添加错题")
+        
+        user_config = ai_service._get_user_ai_config(db, user_id)
+        
+        try:
+            for wp in filtered_weak_points[:count]:
+                wp_subject = wp["subject"]
+                knowledge_point = wp["knowledge_point"]
+                
+                search_query = f"{wp_subject} {knowledge_point} 考研题目"
+                rag_result = rag_service.chat(user_id, search_query, top_k=3, threshold=0.3, ai_config=user_config)
+                
+                context = ""
+                for chunk in rag_result.get("relevant_chunks", []):
+                    context += f"【来源：{chunk['metadata'].get('filename', '未知文档')}】\n"
+                    context += f"{chunk['content']}\n\n"
+                
+                example_output = '{{"question_text": "求极限 $\\\\lim_{x \\\\to 0} \\\\frac{\\\\sin x}{x}$ 的值。", "answer": "1", "analysis": "根据重要极限公式，$\\\\lim_{x \\\\to 0} \\\\frac{\\\\sin x}{x} = 1$", "difficulty": "简单"}}'
+                
+                prompt = """你是一个专业的考研数学出题专家。请根据以下知识库内容，为考研复习生成一道关于""" + \
+                    f"【{wp_subject} - {knowledge_point}】" + """的数学练习题。
+
+知识库内容：
+""" + context + """
+
+要求：
+1. 题目类型：选择题或填空题或解答题（根据知识点选择合适的题型）
+2. 必须包含：题目（question_text）、答案（answer）、解析（analysis）
+3. 数学公式必须使用标准LaTeX格式：
+   - 极限：使用 $\\\\lim_{x \\\\to a} f(x)$ 格式
+   - 分数：使用 $\\\\frac{分子}{分母}$ 格式
+   - 指数：使用 $e^{\\\\text{指数}}$ 或 $a^{\\\\text{指数}}$ 格式
+   - 三角函数：使用 \\\\sin, \\\\cos, \\\\tan, \\\\arcsin, \\\\arccos, \\\\arctan 等
+   - 对数：使用 \\\\ln, \\\\log 格式
+   - 导数：使用 $f'(x)$ 或 $\\\\frac{df}{dx}$ 格式
+   - 积分：使用 $\\\\int$ 格式
+   - 求和：使用 $\\\\sum$ 格式
+4. 所有数学符号、公式、变量、函数都必须用LaTeX格式表示，行内公式用$...$包裹，独立公式用$$...$$包裹
+5. 数字"1"和字母"l"要区分清楚，"0"和字母"o"要区分清楚
+6. 输出格式必须是纯JSON格式，不要包含任何markdown标记或额外文字
+7. JSON结构：{"question_text": "...", "answer": "...", "analysis": "...", "difficulty": "简单/中等/困难"}
+
+示例输出（极限题）：
+{"question_text": "求极限 $\\\\lim_{x \\\\to 0} \\\\frac{e^{\\\\sin x} - 1}{x}$ 的值。", "answer": "1", "analysis": "当 $x \\\\to 0$ 时，$\\\\sin x \\\\sim x$，所以 $e^{\\\\sin x} - 1 \\\\sim \\\\sin x \\\\sim x$，因此 $\\\\lim_{x \\\\to 0} \\\\frac{e^{\\\\sin x} - 1}{x} = \\\\lim_{x \\\\to 0} \\\\frac{x}{x} = 1$", "difficulty": "中等"}
+
+示例输出（导数题）：
+{"question_text": "求函数 $f(x) = x^{\\\\ln x}$ 的导数 $f'(x)$。", "answer": "$x^{\\\\ln x - 1} \\\\cdot 2 \\\\ln x$", "analysis": "使用对数求导法，设 $y = x^{\\\\ln x}$，两边取对数得 $\\\\ln y = (\\\\ln x)^2$，两边对x求导得 $\\\\frac{y'}{y} = \\\\frac{2 \\\\ln x}{x}$，所以 $y' = x^{\\\\ln x} \\\\cdot \\\\frac{2 \\\\ln x}{x} = x^{\\\\ln x - 1} \\\\cdot 2 \\\\ln x$", "difficulty": "困难"}
+
+示例输出（积分题）：
+{"question_text": "计算不定积分 $\\\\int x \\\\cdot e^{2x} dx$。", "answer": "$\\\\frac{1}{4}(2x - 1)e^{2x} + C$", "analysis": "使用分部积分法，设 $u = x$，$dv = e^{2x}dx$，则 $du = dx$，$v = \\\\frac{1}{2}e^{2x}$。根据分部积分公式 $\\\\int u dv = uv - \\\\int v du$，得 $\\\\int x e^{2x} dx = \\\\frac{1}{2}x e^{2x} - \\\\frac{1}{2} \\\\int e^{2x} dx = \\\\frac{1}{2}x e^{2x} - \\\\frac{1}{4}e^{2x} + C = \\\\frac{1}{4}(2x - 1)e^{2x} + C$", "difficulty": "中等"}
+
+注意：必须严格按照示例格式输出，数学公式必须正确使用LaTeX语法！
+"""
+                
+                ai_result = self._call_ai_for_question(db, user_id, prompt)
+                
+                try:
+                    import json
+                    parsed = json.loads(ai_result)
+                    
+                    recommendations.append({
+                        **parsed,
+                        "agent_domain": wp_subject,
+                        "knowledge_point": knowledge_point,
+                        "source": "AI+知识库",
+                        "confidence": 0.85
+                    })
+                except json.JSONDecodeError:
+                    recommendations.append({
+                        "question_text": f"【{wp_subject} - {knowledge_point}】根据知识库内容，请分析以下问题：{knowledge_point}的核心考点是什么？",
+                        "answer": "请参考知识库内容回答",
+                        "analysis": ai_result,
+                        "difficulty": "中等",
+                        "agent_domain": wp_subject,
+                        "knowledge_point": knowledge_point,
+                        "source": "AI+知识库",
+                        "confidence": 0.7
+                    })
+                
+                if len(recommendations) >= count:
+                    break
+        
+        except ValueError as ve:
+            raise ve
+        except Exception as e:
+            print(f"AI生成推荐题目失败: {e}")
+            raise ValueError(f"AI生成题目失败: {str(e)}")
+        
+        return recommendations
+    
+    def _call_ai_for_question(self, db: Session, user_id: int, prompt: str) -> str:
+        from ..services.ai_service import ai_service
+        
+        user_config = ai_service._get_user_ai_config(db, user_id)
+        
+        if not user_config["api_key"]:
+            raise ValueError("用户未配置AI服务，请先在AI配置页面设置API Key")
+        
+        try:
+            import requests
+            
+            llm_url = f"{user_config['base_url']}/chat/completions"
+            payload = {
+                "model": user_config["model"],
+                "messages": [
+                    {"role": "system", "content": "你是一个专业的考研数学出题专家，擅长根据知识点生成高质量的练习题。"},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 1024,
+                "temperature": 0.5
+            }
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {user_config['api_key']}"
+            }
+            
+            response = requests.post(llm_url, json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
+        except ValueError as ve:
+            raise ve
+        except Exception as e:
+            print(f"AI生成题目失败: {e}")
+            raise ValueError(f"AI服务调用失败: {str(e)}")
+    
+    def _generate_preset_recommendations(self, weak_points: list, count: int, subject: str = None) -> list:
+        recommendations = []
         recommended_ids = set()
+        
+        subjects_with_mistakes = set(wp["subject"] for wp in weak_points)
+        
+        if subject:
+            available_subjects = [subject]
+        else:
+            available_subjects = list(subjects_with_mistakes) if subjects_with_mistakes else list(PRESET_QUESTIONS.keys())
         
         for wp in sorted(weak_points, key=lambda x: x["weak_level"], reverse=True):
             if len(recommendations) >= count:
                 break
             
-            subject = wp["subject"]
+            wp_subject = wp["subject"]
             knowledge_point = wp["knowledge_point"]
             
-            if subject in PRESET_QUESTIONS:
-                if knowledge_point in PRESET_QUESTIONS[subject]:
-                    for q in PRESET_QUESTIONS[subject][knowledge_point]:
+            if wp_subject not in available_subjects:
+                continue
+            
+            if wp_subject in PRESET_QUESTIONS:
+                if knowledge_point in PRESET_QUESTIONS[wp_subject]:
+                    for q in PRESET_QUESTIONS[wp_subject][knowledge_point]:
                         if len(recommendations) >= count:
                             break
                         
-                        existing = db.query(Recommendation).filter(
-                            Recommendation.user_id == user_id,
-                            Recommendation.question_text == q["question_text"],
-                            Recommendation.completed == False
-                        ).first()
+                        question_hash = q["question_text"][:100]
+                        if question_hash in recommended_ids:
+                            continue
                         
-                        if not existing:
-                            new_rec = Recommendation(
-                                user_id=user_id,
-                                subject=subject,
-                                knowledge_point=knowledge_point,
-                                difficulty=q["difficulty"],
-                                question_text=q["question_text"],
-                                answer=q["answer"],
-                                analysis=q["analysis"],
-                                source=q["source"]
-                            )
-                            db.add(new_rec)
-                            recommendations.append(new_rec)
+                        recommended_ids.add(question_hash)
+                        recommendations.append({
+                            **q,
+                            "agent_domain": wp_subject,
+                            "confidence": 0.8,
+                            "response_time_ms": 0
+                        })
         
         if len(recommendations) < count:
-            for subject, topics in PRESET_QUESTIONS.items():
+            for sub in available_subjects:
                 if len(recommendations) >= count:
                     break
+                if sub in PRESET_QUESTIONS:
+                    for knowledge_point, questions in PRESET_QUESTIONS[sub].items():
+                        if len(recommendations) >= count:
+                            break
+                        for q in questions:
+                            if len(recommendations) >= count:
+                                break
+                            
+                            question_hash = q["question_text"][:100]
+                            if question_hash in recommended_ids:
+                                continue
+                            
+                            recommended_ids.add(question_hash)
+                            recommendations.append({
+                                **q,
+                                "agent_domain": sub,
+                                "confidence": 0.75,
+                                "response_time_ms": 0
+                            })
+        
+        if len(recommendations) < count and not subject:
+            for sub, topics in PRESET_QUESTIONS.items():
+                if len(recommendations) >= count:
+                    break
+                if sub in available_subjects:
+                    continue
                 for knowledge_point, questions in topics.items():
                     if len(recommendations) >= count:
                         break
@@ -178,29 +444,19 @@ class RecommendationService:
                         if len(recommendations) >= count:
                             break
                         
-                        existing = db.query(Recommendation).filter(
-                            Recommendation.user_id == user_id,
-                            Recommendation.question_text == q["question_text"],
-                            Recommendation.completed == False
-                        ).first()
+                        question_hash = q["question_text"][:100]
+                        if question_hash in recommended_ids:
+                            continue
                         
-                        if not existing:
-                            new_rec = Recommendation(
-                                user_id=user_id,
-                                subject=subject,
-                                knowledge_point=knowledge_point,
-                                difficulty=q["difficulty"],
-                                question_text=q["question_text"],
-                                answer=q["answer"],
-                                analysis=q["analysis"],
-                                source=q["source"]
-                            )
-                            db.add(new_rec)
-                            recommendations.append(new_rec)
+                        recommended_ids.add(question_hash)
+                        recommendations.append({
+                            **q,
+                            "agent_domain": sub,
+                            "confidence": 0.7,
+                            "response_time_ms": 0
+                        })
         
-        db.commit()
-        
-        return [self._to_dict(rec) for rec in recommendations]
+        return recommendations
     
     def get_recommendations(self, db: Session, user_id: int, completed: bool = False) -> list:
         query = db.query(Recommendation).filter(Recommendation.user_id == user_id)
@@ -255,6 +511,12 @@ class RecommendationService:
                 for wp in sorted(weak_points, key=lambda x: x.weak_level, reverse=True)
             ]
         }
+    
+    def get_agent_status(self) -> list:
+        return recommendation_orchestrator.get_agent_status()
+    
+    def toggle_agent(self, agent_name: str, enabled: bool):
+        recommendation_orchestrator.toggle_agent(agent_name, enabled)
     
     def _to_dict(self, rec: Recommendation) -> dict:
         return {

@@ -9,11 +9,43 @@
         <input
           ref="fileInput"
           type="file"
-          accept=".pdf,.doc,.docx,.txt,.md"
+          accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg"
           class="hidden-input"
           @change="handleFileSelect"
         />
       </div>
+    </div>
+
+    <div v-if="knowledgeStatus" class="status-card">
+      <div class="status-item">
+        <el-icon><DataLine /></el-icon>
+        <div class="status-info">
+          <div class="status-value">{{ knowledgeStatus.document_count }}</div>
+          <div class="status-label">文档数量</div>
+        </div>
+      </div>
+      <div class="status-item">
+        <el-icon><FolderOpened /></el-icon>
+        <div class="status-info">
+          <div class="status-value">{{ knowledgeStatus.total_chunks }}</div>
+          <div class="status-label">索引块数</div>
+        </div>
+      </div>
+      <div class="status-item">
+        <el-icon><Connection /></el-icon>
+        <div class="status-info">
+          <div class="status-value">{{ knowledgeStatus.index_size || 0 }}</div>
+          <div class="status-label">向量索引</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <span class="filter-label">学科筛选：</span>
+      <el-select v-model="filterSubject" placeholder="全部学科" clearable @change="loadResources" class="subject-filter">
+        <el-option label="全部" value="" />
+        <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
+      </el-select>
     </div>
 
     <div class="search-bar">
@@ -28,15 +60,74 @@
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
-      <el-button @click="handleSearch">搜索</el-button>
+      <el-button @click="handleSearch">搜索文件</el-button>
+      <el-input
+        v-model="knowledgeSearchQuery"
+        placeholder="搜索知识点..."
+        clearable
+        @keyup.enter="handleKnowledgeSearch"
+        class="search-input"
+      >
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
+      <el-select v-model="knowledgeSearchSubject" placeholder="全部学科" clearable class="subject-filter">
+        <el-option label="全部学科" value="" />
+        <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
+      </el-select>
+      <el-button type="primary" @click="handleKnowledgeSearch">搜索知识点</el-button>
     </div>
 
-    <div v-if="resources.length > 0" class="resources-grid">
+    <div v-if="showKnowledgeSearchResult" class="knowledge-search-results">
+      <h3>知识点搜索结果</h3>
+      
+      <el-card class="ai-answer-card">
+        <div class="ai-answer-header">
+          <span class="ai-icon">🤖</span>
+          <span class="ai-label">AI回答</span>
+        </div>
+        <div v-if="knowledgeSearchLoading" class="ai-loading">
+          <el-spinner />
+          <span>AI正在思考中...</span>
+        </div>
+        <div v-else class="ai-answer-content">
+          {{ knowledgeSearchAnswer }}
+        </div>
+      </el-card>
+
+      <div v-if="knowledgeSearchSources.length > 0" class="knowledge-sources-section">
+        <h4>相关资料来源</h4>
+        <div class="knowledge-results-list">
+          <el-card
+            v-for="(item, index) in knowledgeSearchSources"
+            :key="index"
+            class="knowledge-result-card"
+          >
+            <div class="knowledge-score" :style="{ background: `linear-gradient(90deg, #67c23a ${(item.similarity * 100)}%, #eee ${(item.similarity * 100)}%)` }">
+              {{ (item.similarity * 100).toFixed(1) }}%
+            </div>
+            <div class="knowledge-content">
+              <div class="knowledge-filename">{{ item.filename }}</div>
+              <div class="knowledge-text">{{ item.content }}</div>
+            </div>
+          </el-card>
+        </div>
+      </div>
+
+      <div v-if="!knowledgeSearchLoading && knowledgeSearchSources.length === 0" class="empty-tip">
+        <el-icon><Search /></el-icon>未找到相关知识点，请尝试其他关键词或上传更多资料
+      </div>
+
+      <el-button @click="closeKnowledgeSearch">返回文件列表</el-button>
+    </div>
+
+    <div v-else-if="resources.length > 0" class="resources-grid">
       <el-card
         v-for="resource in resources"
         :key="resource.id"
         class="resource-card"
-        @click="openResourceDetail(resource)"
+        @click="openDocument(resource)"
       >
         <div class="resource-icon">
           {{ getFileIcon(resource.file_type) }}
@@ -44,15 +135,20 @@
         <div class="resource-info">
           <div class="resource-name">{{ resource.filename }}</div>
           <div class="resource-meta">
+            <span class="subject-tag">{{ resource.subject || '未分类' }}</span>
             <span>{{ getFileSize(resource.file_size) }}</span>
-            <span>{{ formatDate(resource.upload_date) }}</span>
+            <span>{{ formatDate(resource.created_at) }}</span>
+            <span v-if="resource.indexed_at" class="indexed-badge">已索引</span>
           </div>
         </div>
         <div class="resource-actions">
-          <el-button type="text" size="small" @click.stop="handleQA(resource)">
-            <el-icon><Message /></el-icon>
+          <el-button type="text" size="small" @click.stop="openDocument(resource)" title="打开">
+            <el-icon><View /></el-icon>
           </el-button>
-          <el-button type="text" size="small" @click.stop="handleDelete(resource.id)">
+          <el-button type="text" size="small" @click.stop="openResourceDetail(resource)" title="详情">
+            <el-icon><InfoFilled /></el-icon>
+          </el-button>
+          <el-button type="text" size="small" @click.stop="handleDelete(resource.id)" title="删除">
             <el-icon><Delete /></el-icon>
           </el-button>
         </div>
@@ -78,26 +174,45 @@
         </div>
         <div class="detail-row">
           <span class="detail-label">上传时间：</span>
-          <span>{{ formatDate(selectedResource.upload_date) }}</span>
+          <span>{{ formatDate(selectedResource.created_at) }}</span>
         </div>
-        <div class="qa-section">
-          <h4>智能问答</h4>
-          <el-input
-            v-model="qaQuestion"
-            placeholder="输入您的问题..."
-            clearable
+        <div class="detail-row">
+          <span class="detail-label">索引状态：</span>
+          <span v-if="selectedResource.indexed_at" class="indexed-badge">已索引</span>
+          <span v-else class="not-indexed">未索引</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">分块数量：</span>
+          <span>{{ selectedResource.chunk_count || 0 }}</span>
+        </div>
+        <div v-if="indexing" class="index-progress">
+          <div class="progress-label">{{ indexProgressMessage }}</div>
+          <el-progress 
+            :percentage="indexProgress" 
+            :status="indexProgressStatus"
+            :stroke-width="16"
+            class="progress-bar"
+          />
+          <el-button 
+            type="danger" 
+            size="small" 
+            class="cancel-btn"
+            @click="handleCancelIndex"
           >
-            <template #append>
-              <el-button @click="handleAskQA">提问</el-button>
-            </template>
-          </el-input>
-          <div v-if="qaAnswer" class="qa-answer">
-            <div class="answer-header">回答</div>
-            <div class="answer-content">{{ qaAnswer }}</div>
-            <div v-if="qaSource" class="answer-source">来源：{{ qaSource }}</div>
-          </div>
+            取消索引
+          </el-button>
         </div>
       </div>
+      <template #footer>
+        <el-button @click="showDetail = false">关闭</el-button>
+        <el-button 
+          v-if="selectedResource && !selectedResource.indexed_at && !indexing" 
+          type="primary" 
+          @click="handleIndex"
+        >
+          开始索引
+        </el-button>
+      </template>
     </el-dialog>
 
     <el-dialog
@@ -111,9 +226,24 @@
           <div class="upload-filename">{{ selectedFile.name }}</div>
           <div class="upload-size">{{ getFileSize(selectedFile.size) }}</div>
         </div>
+        <div class="upload-subject-select">
+          <span class="upload-subject-label">所属学科：</span>
+          <el-select v-model="uploadSubject" placeholder="选择学科" class="upload-subject-picker">
+            <el-option label="未分类" value="未分类" />
+            <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
+          </el-select>
+        </div>
+        <div v-if="uploading" class="upload-progress">
+          <el-progress
+            :percentage="uploadProgress"
+            :stroke-width="12"
+            :status="uploadProgressStatus"
+          />
+          <span class="upload-progress-text">{{ uploadProgress }}%</span>
+        </div>
       </div>
       <template #footer>
-        <el-button @click="cancelUpload">取消</el-button>
+        <el-button @click="cancelUpload" :disabled="uploading">取消</el-button>
         <el-button type="primary" :loading="uploading" @click="confirmUpload">
           {{ uploading ? '上传中...' : '确认上传' }}
         </el-button>
@@ -123,26 +253,46 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Message, Delete, FolderOpened } from '@element-plus/icons-vue'
+import { Plus, Search, View, InfoFilled, Delete, FolderOpened, DataLine, Connection } from '@element-plus/icons-vue'
 import {
-  uploadResource, getResources, deleteResource, searchResources, resourceQA,
-  type Resource
-} from '../api/resources'
+  uploadDocument, getDocuments, deleteDocument, getKnowledgeStatus, indexDocument, cancelIndexDocument, ragChat, getDocumentDownloadUrl,
+  type RAGDocument, type KnowledgeStatus, type RAGChatResult
+} from '../api/rag'
 
-const resources = ref<Resource[]>([])
+// 学科列表（与推荐模块保持一致）
+const SUBJECTS = ['数学', '英语', '政治', '马原', '毛中特', '史纲', '思修', '时政', '专业课']
+
+const resources = ref<RAGDocument[]>([])
 const searchQuery = ref('')
+const knowledgeSearchQuery = ref('')
+const filterSubject = ref<string>('')           // 文件列表筛选学科
+const knowledgeSearchSubject = ref<string>('')  // 知识点搜索筛选学科
+const uploadSubject = ref<string>('未分类')      // 上传时选择的学科
 const showDetail = ref(false)
-const selectedResource = ref<Resource | null>(null)
-const qaQuestion = ref('')
-const qaAnswer = ref('')
-const qaSource = ref('')
+const selectedResource = ref<RAGDocument | null>(null)
+const knowledgeStatus = ref<KnowledgeStatus | null>(null)
+const showKnowledgeSearchResult = ref(false)
+const knowledgeSearchLoading = ref(false)
+const knowledgeSearchAnswer = ref('')
+const knowledgeSearchSources = ref<Array<{
+  content: string
+  filename: string
+  similarity: number
+}>>([])
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const showUploadDialog = ref(false)
 const selectedFile = ref<File | null>(null)
 const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadProgressStatus = ref<'success' | 'exception' | 'warning' | undefined>(undefined)
+const indexing = ref(false)
+const indexProgress = ref(0)
+const indexProgressMessage = ref('准备开始')
+const indexProgressStatus = ref<'success' | 'exception' | 'warning' | undefined>(undefined)
+let progressEventSource: EventSource | null = null
 
 function getFileIcon(fileType: string) {
   const icons: Record<string, string> = {
@@ -150,7 +300,10 @@ function getFileIcon(fileType: string) {
     doc: '📝',
     docx: '📝',
     txt: '📄',
-    md: '📝'
+    md: '📝',
+    png: '🖼️',
+    jpg: '🖼️',
+    jpeg: '🖼️'
   }
   return icons[fileType] || '📁'
 }
@@ -161,15 +314,25 @@ function getFileSize(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-function formatDate(dateStr: string) {
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return '-'
   return new Date(dateStr).toLocaleString('zh-CN')
 }
 
 async function loadResources() {
   try {
-    resources.value = await getResources()
+    resources.value = await getDocuments(filterSubject.value || undefined)
+    await loadKnowledgeStatus()
   } catch {
     resources.value = []
+  }
+}
+
+async function loadKnowledgeStatus() {
+  try {
+    knowledgeStatus.value = await getKnowledgeStatus()
+  } catch {
+    knowledgeStatus.value = null
   }
 }
 
@@ -194,16 +357,27 @@ async function confirmUpload() {
   }
   
   uploading.value = true
+  uploadProgress.value = 0
+  uploadProgressStatus.value = undefined
   try {
-    await uploadResource(selectedFile.value)
+    await uploadDocument(selectedFile.value, uploadSubject.value || undefined, (progress) => {
+      uploadProgress.value = progress
+    })
+    uploadProgress.value = 100
+    uploadProgressStatus.value = 'success'
     ElMessage.success('上传成功')
     await loadResources()
-    showUploadDialog.value = false
-    selectedFile.value = null
-    if (fileInput.value) {
-      fileInput.value.value = ''
-    }
+    setTimeout(() => {
+      showUploadDialog.value = false
+      selectedFile.value = null
+      uploadProgress.value = 0
+      uploadProgressStatus.value = undefined
+      if (fileInput.value) {
+        fileInput.value.value = ''
+      }
+    }, 500)
   } catch (error: any) {
+    uploadProgressStatus.value = 'exception'
     const errorMsg = error.response?.data?.detail || 
                      error.message || 
                      '上传失败，请检查网络连接或文件大小'
@@ -223,9 +397,13 @@ function cancelUpload() {
 }
 
 async function handleSearch() {
+  showKnowledgeSearchResult.value = false
   try {
     if (searchQuery.value.trim()) {
-      resources.value = await searchResources(searchQuery.value.trim())
+      const allResources = await getDocuments(filterSubject.value || undefined)
+      resources.value = allResources.filter(r =>
+        r.filename.toLowerCase().includes(searchQuery.value.trim().toLowerCase())
+      )
     } else {
       await loadResources()
     }
@@ -234,44 +412,60 @@ async function handleSearch() {
   }
 }
 
-function openResourceDetail(resource: Resource) {
-  selectedResource.value = resource
-  qaQuestion.value = ''
-  qaAnswer.value = ''
-  qaSource.value = ''
-  showDetail.value = true
-}
-
-async function handleQA(resource: Resource) {
-  selectedResource.value = resource
-  qaQuestion.value = ''
-  qaAnswer.value = ''
-  qaSource.value = ''
-  showDetail.value = true
-}
-
-async function handleAskQA() {
-  if (!selectedResource.value || !qaQuestion.value.trim()) {
-    ElMessage.warning('请先选择资料并输入问题')
+async function handleKnowledgeSearch() {
+  if (!knowledgeSearchQuery.value.trim()) {
+    ElMessage.warning('请输入搜索词')
     return
   }
+
+  knowledgeSearchLoading.value = true
   try {
-    const result = await resourceQA(selectedResource.value.id, qaQuestion.value.trim())
-    qaAnswer.value = result.answer
-    qaSource.value = result.source || ''
+    const result: RAGChatResult = await ragChat(
+      knowledgeSearchQuery.value.trim(),
+      5,
+      0.2,
+      knowledgeSearchSubject.value || undefined
+    )
+    knowledgeSearchAnswer.value = result.answer || '暂无回答'
+    knowledgeSearchSources.value = (result.relevant_chunks || []).map(item => ({
+      content: item.content || '',
+      filename: item.metadata?.filename || '未知文件',
+      similarity: item.similarity || 0
+    }))
+    showKnowledgeSearchResult.value = true
+    resources.value = []
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '提问失败')
+    ElMessage.error(error.response?.data?.detail || '搜索失败')
+  } finally {
+    knowledgeSearchLoading.value = false
   }
+}
+
+function closeKnowledgeSearch() {
+  showKnowledgeSearchResult.value = false
+  knowledgeSearchAnswer.value = ''
+  knowledgeSearchSources.value = []
+  loadResources()
+}
+
+function openDocument(resource: RAGDocument) {
+  const url = getDocumentDownloadUrl(resource.id)
+  window.open(url, '_blank')
+}
+
+function openResourceDetail(resource: RAGDocument) {
+  selectedResource.value = resource
+  showDetail.value = true
 }
 
 async function handleDelete(id: number) {
   try {
-    await ElMessageBox.confirm('确定要删除该资料吗？', '确认删除', {
+    await ElMessageBox.confirm('确定要删除该资料吗？删除后将从知识库中移除', '确认删除', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'
     })
-    await deleteResource(id)
+    await deleteDocument(id)
     ElMessage.success('删除成功')
     await loadResources()
   } catch (error) {
@@ -281,7 +475,96 @@ async function handleDelete(id: number) {
   }
 }
 
-loadResources()
+async function handleIndex() {
+  if (!selectedResource.value) return
+  
+  indexing.value = true
+  indexProgress.value = 0
+  indexProgressMessage.value = '准备开始'
+  indexProgressStatus.value = undefined
+  
+  const documentId = selectedResource.value.id
+  
+  try {
+    await indexDocument(documentId)
+  } catch (error: any) {
+    const errorMsg = error.response?.data?.detail || '启动索引失败'
+    ElMessage.error(errorMsg)
+    indexing.value = false
+    return
+  }
+  
+  await new Promise<void>((resolve) => {
+    const token = localStorage.getItem('token')
+    progressEventSource = new EventSource(`/api/rag/documents/${documentId}/index/progress?token=${token}`)
+    
+    progressEventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        indexProgress.value = data.progress
+        indexProgressMessage.value = data.message
+        
+        if (data.status === 'completed') {
+          indexProgressStatus.value = 'success'
+          progressEventSource?.close()
+          resolve()
+        } else if (data.status === 'failed') {
+          indexProgressStatus.value = 'exception'
+          progressEventSource?.close()
+          resolve()
+        } else if (data.status === 'cancelled') {
+          indexProgressStatus.value = 'exception'
+          progressEventSource?.close()
+          resolve()
+        }
+      } catch (e) {
+        console.error('解析进度数据失败:', e)
+      }
+    }
+    
+    progressEventSource.onerror = () => {
+      progressEventSource?.close()
+      resolve()
+    }
+  })
+  
+  try {
+    if (indexProgressMessage.value === '用户已取消索引') {
+      ElMessage.info('索引已取消')
+    } else if (indexProgressStatus.value === 'success') {
+      ElMessage.success('索引创建成功')
+      showDetail.value = false
+      await loadResources()
+    } else if (indexProgressStatus.value === 'exception') {
+      ElMessage.error(indexProgressMessage.value || '索引失败')
+    }
+  } catch (error: any) {
+    console.error('索引完成后处理错误:', error)
+  } finally {
+    indexing.value = false
+    progressEventSource?.close()
+    progressEventSource = null
+  }
+}
+
+async function handleCancelIndex() {
+  if (!selectedResource.value) return
+  
+  try {
+    const result = await cancelIndexDocument(selectedResource.value.id)
+    if (result.success) {
+      ElMessage.info('索引已取消')
+    } else {
+      ElMessage.warning(result.message || '没有正在进行的索引任务')
+    }
+  } catch (error: any) {
+    ElMessage.error('取消失败')
+  }
+}
+
+onMounted(() => {
+  loadResources()
+})
 </script>
 
 <style scoped>
@@ -303,14 +586,97 @@ loadResources()
   font-size: 20px;
 }
 
+.status-card {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-item .el-icon {
+  font-size: 24px;
+  color: #667eea;
+}
+
+.status-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.status-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+}
+
+.status-label {
+  font-size: 12px;
+  color: #909399;
+}
+
 .search-bar {
   display: flex;
   gap: 12px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .search-input {
-  width: 300px;
+  width: 250px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.filter-label {
+  font-size: 14px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.subject-filter {
+  width: 160px;
+}
+
+.subject-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #ecf5ff;
+  color: #409eff;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 4px;
+}
+
+.upload-subject-select {
+  width: 100%;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-subject-label {
+  font-size: 14px;
+  color: #606266;
+  white-space: nowrap;
+}
+
+.upload-subject-picker {
+  flex: 1;
 }
 
 .resources-grid {
@@ -356,6 +722,19 @@ loadResources()
   margin-top: 4px;
 }
 
+.indexed-badge {
+  background: #67c23a;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.not-indexed {
+  color: #f56c6c;
+  font-weight: 500;
+}
+
 .resource-actions {
   display: flex;
   gap: 8px;
@@ -388,41 +767,25 @@ loadResources()
   color: #666;
 }
 
-.qa-section {
+.index-progress {
   margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #eee;
-}
-
-.qa-section h4 {
-  margin: 0 0 12px;
-  font-size: 14px;
-  color: #333;
-}
-
-.qa-answer {
-  margin-top: 12px;
-  padding: 12px;
+  padding: 16px;
   background: #f5f7fa;
-  border-radius: 4px;
+  border-radius: 8px;
 }
 
-.answer-header {
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: #333;
-}
-
-.answer-content {
+.progress-label {
   font-size: 14px;
-  line-height: 1.6;
-  color: #333;
+  color: #666;
+  margin-bottom: 8px;
 }
 
-.answer-source {
-  font-size: 12px;
-  color: #909399;
+.progress-bar {
   margin-top: 8px;
+}
+
+.cancel-btn {
+  margin-top: 12px;
 }
 
 .hidden-input {
@@ -454,5 +817,122 @@ loadResources()
   font-size: 14px;
   color: #909399;
   margin-top: 4px;
+}
+
+.upload-progress {
+  width: 100%;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #eee;
+}
+
+.upload-progress-text {
+  display: block;
+  text-align: center;
+  margin-top: 8px;
+  font-size: 14px;
+  color: #666;
+}
+
+.knowledge-search-results {
+  margin-top: 20px;
+}
+
+.knowledge-search-results h3 {
+  margin-bottom: 16px;
+  font-size: 16px;
+  color: #333;
+}
+
+.ai-answer-card {
+  margin-bottom: 20px;
+  padding: 20px;
+}
+
+.ai-answer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ai-icon {
+  font-size: 24px;
+}
+
+.ai-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: #667eea;
+}
+
+.ai-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  color: #666;
+}
+
+.ai-answer-content {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #333;
+  white-space: pre-wrap;
+}
+
+.knowledge-sources-section {
+  margin-top: 20px;
+}
+
+.knowledge-sources-section h4 {
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #666;
+}
+
+.knowledge-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.knowledge-result-card {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+}
+
+.knowledge-score {
+  width: 80px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.knowledge-content {
+  flex: 1;
+}
+
+.knowledge-filename {
+  font-size: 14px;
+  font-weight: 500;
+  color: #667eea;
+  margin-bottom: 8px;
+}
+
+.knowledge-text {
+  font-size: 14px;
+  color: #666;
+  line-height: 1.6;
+  max-height: 120px;
+  overflow-y: auto;
 }
 </style>

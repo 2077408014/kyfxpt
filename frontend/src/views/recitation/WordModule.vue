@@ -17,27 +17,65 @@
         <p class="stat-value">{{ wordStats.today }}</p>
         <p class="stat-label">今日学习</p>
       </div>
+      <div class="stat-card source-card">
+        <p class="stat-value" style="font-size: 18px">{{ currentSourceLabel }}</p>
+        <p class="stat-label">当前来源</p>
+      </div>
     </div>
 
     <el-tabs v-model="subTab" class="sub-tabs">
       <el-tab-pane label="今日学习" name="today">
         <div class="study-section">
           <div class="plan-bar">
-            <el-form :inline="true">
-              <el-form-item label="每日学习量">
-                <el-slider v-model="dailyCount" :min="5" :max="100" :step="5" style="width: 200px" />
-                <span style="margin-left: 12px">{{ dailyCount }} 词</span>
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="savePlan">保存计划</el-button>
-              </el-form-item>
-            </el-form>
-          </div>
+              <el-form :inline="true">
+                <el-form-item label="词汇分类">
+                  <el-select
+                    v-model="selectedCategory"
+                    placeholder="选择词汇分类"
+                    style="width: 150px"
+                    clearable
+                    @change="handleCategoryChange"
+                  >
+                    <el-option label="全部" value="" />
+                    <el-option v-for="cat in categories" :key="cat" :label="cat" :value="cat" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="每日学习量">
+                  <el-slider v-model="dailyCount" :min="5" :max="100" :step="5" style="width: 200px" />
+                  <span style="margin-left: 12px">{{ dailyCount }} 词</span>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" @click="savePlan">保存计划</el-button>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="success" :loading="uploadingWordbook" @click="triggerWordbookUpload">
+                    <el-icon><Upload /></el-icon>上传词书
+                  </el-button>
+                  <input
+                    ref="wordbookInput"
+                    type="file"
+                    accept=".pdf,.txt,.doc,.docx"
+                    class="hidden-input"
+                    @change="handleWordbookSelect"
+                  />
+                </el-form-item>
+              </el-form>
+              <div class="daily-stats">
+                <span class="daily-stat-item">
+                  <el-tag type="warning">待复习: {{ reviewCount }}</el-tag>
+                </span>
+                <span class="daily-stat-item">
+                  <el-tag type="success">新单词: {{ newCount }}</el-tag>
+                </span>
+              </div>
+            </div>
 
           <div v-if="currentWord" class="word-card">
             <div class="word-header">
               <span class="word-number">{{ currentIndex + 1 }} / {{ todayWords.length }}</span>
               <span class="word-tag">{{ currentWord.exam_requirement }}</span>
+              <span v-if="currentIndex < reviewCount" class="review-badge">复习</span>
+              <span v-else class="new-badge">新单词</span>
             </div>
             <h2 class="word">{{ currentWord.word }}</h2>
             <p class="phonetic">{{ currentWord.phonetic }}</p>
@@ -89,6 +127,7 @@
               clearable
               @change="loadWordList"
             >
+              <el-option label="未学习" value="未学习" />
               <el-option label="陌生" value="陌生" />
               <el-option label="认识" value="认识" />
               <el-option label="熟悉" value="熟悉" />
@@ -158,12 +197,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { VideoPlay } from '@element-plus/icons-vue'
+import { VideoPlay, Upload } from '@element-plus/icons-vue'
 import {
   getWordStats, getTodayWords, getReviewWords, getWordList,
-  studyWord, getStudyPlan, saveStudyPlan, type Word, type UserWord
+  studyWord, getStudyPlan, saveStudyPlan, getWordCategories, uploadWordbook,
+  type Word, type UserWord, type TodayWordsResponse
 } from '../../api/words'
 import { useSpeech } from '@/composables/useSpeech'
 
@@ -174,8 +214,11 @@ const wordStats = reactive({
   total: 0,
   studied: 0,
   mastered: 0,
-  today: 0
+  today: 0,
+  has_wordbook: false
 })
+const uploadingWordbook = ref(false)
+const wordbookInput = ref<HTMLInputElement | null>(null)
 const dailyCount = ref(20)
 const todayWords = ref<Word[]>([])
 const currentIndex = ref(0)
@@ -187,28 +230,40 @@ const filterLevel = ref('')
 const currentPage = ref(1)
 const pageSize = ref(20)
 const totalWords = ref(0)
+const reviewCount = ref(0)
+const newCount = ref(0)
 
 const currentWord = ref<Word | null>(null)
+const categories = ref<string[]>([])
+const selectedCategory = ref<string>('')
+
+const currentSourceLabel = computed(() => {
+  const cat = selectedCategory.value
+  if (!cat || cat === '全部') return '系统+词书'
+  if (cat === '我的词书') return '我的词书'
+  return cat
+})
 
 function getMasteryTagType(level: string) {
   switch (level) {
+    case '未学习': return 'default'
     case '陌生': return 'danger'
     case '认识': return 'warning'
     case '熟悉': return 'info'
     case '掌握': return 'success'
-    default: return 'info'
+    default: return 'default'
   }
 }
 
-async function loadStats() {
+async function loadStats(category?: string) {
   try {
-    const stats = await getWordStats()
+    const stats = await getWordStats(category)
     Object.assign(wordStats, stats)
   } catch {
-    wordStats.total = 5500
-    wordStats.studied = 1200
-    wordStats.mastered = 450
-    wordStats.today = 20
+    wordStats.total = 0
+    wordStats.studied = 0
+    wordStats.mastered = 0
+    wordStats.today = 0
   }
 }
 
@@ -216,23 +271,41 @@ async function loadPlan() {
   try {
     const plan = await getStudyPlan()
     dailyCount.value = plan.daily_word_count
+    if (plan.word_category !== null && plan.word_category !== undefined) {
+      selectedCategory.value = plan.word_category
+    }
   } catch {
     dailyCount.value = 20
   }
 }
 
+async function loadCategories() {
+  try {
+    const result = await getWordCategories()
+    categories.value = result.categories
+  } catch {
+    categories.value = ['CET-4', 'CET-6', '考研']
+  }
+}
+
 async function savePlan() {
   try {
-    await saveStudyPlan(dailyCount.value)
+    await saveStudyPlan(dailyCount.value, selectedCategory.value || undefined)
+    await loadTodayWords()
     ElMessage.success('学习计划已保存')
   } catch {
+    await loadTodayWords()
     ElMessage.success(`学习计划已保存：每日${dailyCount.value}词`)
   }
 }
 
 async function loadTodayWords() {
   try {
-    todayWords.value = await getTodayWords(dailyCount.value)
+    const category = selectedCategory.value || undefined
+    const result: TodayWordsResponse = await getTodayWords(dailyCount.value, category)
+    todayWords.value = [...result.review, ...result.new]
+    reviewCount.value = result.review_count
+    newCount.value = result.new_count
     currentIndex.value = 0
     currentWord.value = todayWords.value[0] || null
     showMeaning.value = false
@@ -242,6 +315,8 @@ async function loadTodayWords() {
       { id: 2, word: 'ability', phonetic: '/əˈbɪləti/', meaning: 'n. 能力，才能', example_sentence: 'She has the ability to learn quickly.', difficulty: 1, frequency: 88, exam_requirement: '考纲词' },
       { id: 3, word: 'absolute', phonetic: '/ˈæbsəluːt/', meaning: 'adj. 绝对的，完全的', example_sentence: 'This is an absolute truth.', difficulty: 2, frequency: 75, exam_requirement: '考纲词' },
     ]
+    reviewCount.value = 0
+    newCount.value = todayWords.value.length
     currentWord.value = todayWords.value[0]
   }
 }
@@ -264,7 +339,8 @@ async function loadWordList() {
       page: currentPage.value,
       page_size: pageSize.value,
       mastery_level: filterLevel.value || undefined,
-      keyword: searchKeyword.value || undefined
+      keyword: searchKeyword.value || undefined,
+      category: selectedCategory.value || undefined
     })
     wordList.value = result.items
     totalWords.value = result.total
@@ -297,8 +373,57 @@ async function markResult(result: string) {
 onMounted(async () => {
   await loadStats()
   await loadPlan()
+  await loadCategories()
   await loadTodayWords()
+  await loadWordList()
+  await loadReviewWordsForTab()
 })
+
+async function handleCategoryChange() {
+  const cat = selectedCategory.value || undefined
+  await loadTodayWords()
+  await loadStats(cat)
+  await loadWordList()
+  await savePlan()
+}
+
+function triggerWordbookUpload() {
+  wordbookInput.value?.click()
+}
+
+async function handleWordbookSelect(event: Event) {
+  const target = event.target as HTMLInputElement
+  if (!target.files || target.files.length === 0) return
+  const file = target.files[0]
+
+  uploadingWordbook.value = true
+  try {
+    const result = await uploadWordbook(file)
+    ElMessage.success(result.message)
+    // 词书导入后重新加载：统计、分类、今日单词
+    selectedCategory.value = ''
+    await loadStats()
+    await loadCategories()
+    await loadTodayWords()
+    await loadWordList()
+  } catch (error: any) {
+    const msg = error.response?.data?.detail || error.message || '词书上传失败'
+    ElMessage.error(msg)
+  } finally {
+    uploadingWordbook.value = false
+    if (wordbookInput.value) {
+      wordbookInput.value.value = ''
+    }
+  }
+}
+
+async function loadReviewWordsForTab() {
+  try {
+    reviewWords.value = await getReviewWords()
+  } catch {
+    reviewWords.value = []
+  }
+}
 </script>
 
 <style scoped>
@@ -311,7 +436,7 @@ onMounted(async () => {
 
 .stats-section {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 20px;
   margin-bottom: 20px;
 }
@@ -321,6 +446,10 @@ onMounted(async () => {
   padding: 20px;
   border-radius: 12px;
   text-align: center;
+}
+
+.source-card {
+  background: #ecfdf5;
 }
 
 .stat-value {
@@ -372,6 +501,32 @@ onMounted(async () => {
   color: #3b82f6;
   border-radius: 4px;
   font-size: 12px;
+}
+
+.review-badge {
+  padding: 4px 12px;
+  background: #fef3c7;
+  color: #d97706;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.new-badge {
+  padding: 4px 12px;
+  background: #dcfce7;
+  color: #22c55e;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.daily-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e0e0e0;
 }
 
 .word {
@@ -439,5 +594,9 @@ onMounted(async () => {
 
 .review-section {
   min-height: 300px;
+}
+
+.hidden-input {
+  display: none;
 }
 </style>

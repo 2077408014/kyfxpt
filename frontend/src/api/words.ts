@@ -9,6 +9,8 @@ export interface Word {
   difficulty: number
   frequency: number
   exam_requirement: string
+  category?: string
+  type?: string
 }
 
 export interface UserWord {
@@ -30,22 +32,40 @@ export interface WordStats {
   studied: number
   mastered: number
   today: number
+  has_wordbook?: boolean
 }
 
 export interface StudyPlan {
   daily_word_count: number
+  word_category: string | null
 }
 
-export async function getWordStats(): Promise<WordStats> {
-  return await axios.get('/api/words/stats')
+export async function getWordStats(category?: string): Promise<WordStats> {
+  return await axios.get('/words/stats', { params: category ? { category } : {} })
 }
 
-export async function getTodayWords(count: number = 20): Promise<Word[]> {
-  return await axios.get('/api/words/today', { params: { count } })
+export interface TodayWordsResponse {
+  review: Word[]
+  new: Word[]
+  review_count: number
+  new_count: number
+  total_today: number
+}
+
+export async function getTodayWords(count: number = 20, category?: string): Promise<TodayWordsResponse> {
+  return await axios.get('/words/today', { params: { count, category } })
+}
+
+export async function getDailyReviewWords(category?: string): Promise<{ words: Word[]; count: number }> {
+  return await axios.get('/words/daily-review', { params: { category } })
+}
+
+export async function getWordCategories(): Promise<{ categories: string[] }> {
+  return await axios.get('/words/categories')
 }
 
 export async function getReviewWords(): Promise<UserWord[]> {
-  return await axios.get('/api/words/review')
+  return await axios.get('/words/review')
 }
 
 export async function getWordList(params?: {
@@ -53,18 +73,35 @@ export async function getWordList(params?: {
   page_size?: number
   mastery_level?: string
   keyword?: string
+  category?: string
 }): Promise<{ total: number; items: UserWord[] }> {
-  return await axios.get('/api/words/list', { params })
+  return await axios.get('/words/list', { params })
 }
 
 export async function studyWord(wordId: number, result: string): Promise<UserWord> {
-  return await axios.post('/api/words/study', { word_id: wordId, result })
+  return await axios.post('/words/study', { word_id: wordId, result })
 }
 
 export async function getStudyPlan(): Promise<StudyPlan> {
-  return await axios.get('/api/words/plan')
+  return await axios.get('/words/plan')
 }
 
-export async function saveStudyPlan(dailyWordCount: number): Promise<StudyPlan> {
-  return await axios.post('/api/words/plan', { daily_word_count: dailyWordCount })
+export async function saveStudyPlan(dailyWordCount: number, wordCategory?: string): Promise<StudyPlan> {
+  return await axios.post('/words/plan', { daily_word_count: dailyWordCount, word_category: wordCategory })
+}
+
+export interface UploadWordbookResult {
+  success: boolean
+  message: string
+  imported_count?: number
+  category?: string
+}
+
+export async function uploadWordbook(file: File, category?: string): Promise<UploadWordbookResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (category) {
+    formData.append('category', category)
+  }
+  return await axios.post('/words/upload-wordbook', formData)
 }

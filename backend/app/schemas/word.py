@@ -34,3 +34,4 @@ class WordStudyRequest(BaseModel):
 
 class StudyPlanRequest(BaseModel):
     daily_word_count: int = Field(..., ge=5, le=100, description="每日学习单词数量")
+    word_category: Optional[str] = Field(None, description="词汇分类")

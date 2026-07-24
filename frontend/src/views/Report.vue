@@ -110,6 +110,21 @@ async function loadReport() {
   }
 }
 
+function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  r = Math.min(r, w / 2, h / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + w - r, y)
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+  ctx.lineTo(x + w, y + h - r)
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+  ctx.lineTo(x + r, y + h)
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+}
+
 async function renderChart() {
   try {
     const trend = await getWeeklyTrend()
@@ -153,17 +168,23 @@ async function renderChart() {
 
     for (let i = 0; i < labels.length; i++) {
       const x = padding + i * (barWidth + gap) + gap / 2
-      const height = (data[i] / maxValue) * (canvas.height - padding * 2)
+      const height = data[i] > 0 ? (data[i] / maxValue) * (canvas.height - padding * 2) : 0
       const y = canvas.height - padding - height
 
-      const gradient = ctx.createLinearGradient(x, y, x, canvas.height - padding)
-      gradient.addColorStop(0, '#667eea')
-      gradient.addColorStop(1, '#764ba2')
+      if (height > 0) {
+        const gradient = ctx.createLinearGradient(x, y, x, canvas.height - padding)
+        gradient.addColorStop(0, '#667eea')
+        gradient.addColorStop(1, '#764ba2')
 
-      ctx.fillStyle = gradient
-      ctx.beginPath()
-      ctx.roundRect(x, y, barWidth, height, 4)
-      ctx.fill()
+        ctx.fillStyle = gradient
+        drawRoundRect(ctx, x, y, barWidth, height, Math.min(4, height / 2))
+        ctx.fill()
+
+        ctx.fillStyle = '#303133'
+        ctx.font = '11px Arial'
+        ctx.textAlign = 'center'
+        ctx.fillText(String(data[i]), x + barWidth / 2, y - 5)
+      }
 
       ctx.fillStyle = '#666'
       ctx.font = '12px Arial'

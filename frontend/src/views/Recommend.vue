@@ -2,9 +2,28 @@
   <div class="recommend-page">
     <div class="page-header">
       <h2>智能推荐</h2>
-      <el-button type="primary" @click="handleGenerate">
-        <el-icon><Refresh /></el-icon>生成推荐题目
-      </el-button>
+      <div class="generate-controls">
+        <el-select
+          v-model="selectedSubject"
+          placeholder="选择科目"
+          clearable
+          class="subject-select"
+        >
+          <el-option label="全部科目" value="" />
+          <el-option label="数学" value="数学" />
+          <el-option label="英语" value="英语" />
+          <el-option label="政治" value="政治" />
+          <el-option label="马原" value="马原" />
+          <el-option label="毛中特" value="毛中特" />
+          <el-option label="史纲" value="史纲" />
+          <el-option label="思修" value="思修" />
+          <el-option label="时政" value="时政" />
+          <el-option label="专业课" value="专业课" />
+        </el-select>
+        <el-button type="primary" @click="handleGenerate">
+          <el-icon><Refresh /></el-icon>生成推荐题目
+        </el-button>
+      </div>
     </div>
 
     <div class="stats-row">
@@ -29,6 +48,44 @@
           <div class="stat-label">正确率</div>
         </div>
       </el-card>
+      <el-card class="stat-card">
+        <div class="stat-icon">⚡</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ collaborationStats.avg_response_time_ms }}ms</div>
+          <div class="stat-label">平均响应</div>
+        </div>
+      </el-card>
+    </div>
+
+    <div class="section">
+      <h3>智能体状态</h3>
+      <div v-if="agents.length > 0" class="agents-grid">
+        <el-card
+          v-for="agent in agents"
+          :key="agent.name"
+          class="agent-card"
+          :class="{ 'agent-disabled': !agent.enabled }"
+        >
+          <div class="agent-header">
+            <div class="agent-info">
+              <div class="agent-name">{{ agent.domain }}</div>
+              <div class="agent-label">{{ agent.name }}</div>
+            </div>
+            <el-switch
+              v-model="agent.enabled"
+              @change="handleToggleAgent(agent.name, agent.enabled)"
+              :disabled="loading"
+            />
+          </div>
+          <div class="agent-keywords">
+            <el-tag v-for="kw in agent.keywords.slice(0, 3)" :key="kw" size="small">{{ kw }}</el-tag>
+            <span v-if="agent.keywords.length > 3" class="more-keywords">+{{ agent.keywords.length - 3 }}</span>
+          </div>
+        </el-card>
+      </div>
+      <div v-else class="empty-tip">
+        <el-icon><InfoFilled /></el-icon>暂无智能体信息
+      </div>
     </div>
 
     <div class="section">
@@ -64,16 +121,16 @@
           </div>
           <div class="rec-question">
             <span class="question-label">题目：</span>
-            {{ rec.question_text }}
+            <div class="question-text" v-html="renderLatex(rec.question_text)"></div>
           </div>
           <div class="rec-answer" v-if="showAnswers[rec.id]">
             <div class="answer-section">
               <span class="answer-label">答案：</span>
-              {{ rec.answer }}
+              <div class="answer-text" v-html="renderLatex(rec.answer)"></div>
             </div>
             <div class="analysis-section" v-if="rec.analysis">
               <span class="analysis-label">解析：</span>
-              {{ rec.analysis }}
+              <div class="analysis-text" v-html="renderLatex(rec.analysis)"></div>
             </div>
           </div>
           <div class="rec-actions">
@@ -128,11 +185,168 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, InfoFilled, Check, Close } from '@element-plus/icons-vue'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import {
   analyzeWeakPoints, generateRecommendations, getRecommendations,
-  completeRecommendation, getRecommendationReport,
-  type Recommendation, type WeakPoint, type RecommendationReport
+  completeRecommendation, getRecommendationReport, getAgentStatus,
+  toggleAgent, getCollaborationLogs,
+  type Recommendation, type WeakPoint, type RecommendationReport,
+  type AgentInfo, type CollaborationStats
 } from '../api/recommendation'
+
+function renderLatex(text: string): string {
+  if (!text) return ''
+  
+  let result = text
+  
+  result = result.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
+    try {
+      return katex.renderToString(formula.trim(), {
+        throwOnError: false,
+        displayMode: true
+      })
+    } catch {
+      return match
+    }
+  })
+  
+  result = result.replace(/\$([^\$]+)\$/g, (match, formula) => {
+    try {
+      const isDisplayMode = formula.includes('lim') || formula.includes('int') || formula.includes('sum') || formula.includes('frac') || formula.length > 50
+      return katex.renderToString(formula.trim(), {
+        throwOnError: false,
+        displayMode: isDisplayMode
+      })
+    } catch {
+      return match
+    }
+  })
+  
+  const limPattern = /lim_{[^}]+}/g
+  result = result.replace(limPattern, (match) => {
+    try {
+      return katex.renderToString(match, {
+        throwOnError: false,
+        displayMode: true
+      })
+    } catch {
+      return match
+    }
+  })
+  
+  const fracPattern = /frac_{[^}]+}_{[^}]+}/g
+  result = result.replace(fracPattern, (match) => {
+    try {
+      return katex.renderToString(match.replace(/_/g, '\\'), {
+        throwOnError: false,
+        displayMode: true
+      })
+    } catch {
+      return match
+    }
+  })
+  
+  result = processMathProblems(result)
+  
+  return result
+}
+
+function processMathProblems(text: string): string {
+  if (!text) return ''
+  
+  const mathPattern = /(求\s*(?:lim|导数|积分|解|证明)\s*[\s\S]*?)(?=\n\n|\n求|\n\d+\.|$)/gi
+  
+  return text.replace(mathPattern, (problem) => {
+    const cleaned = cleanMathText(problem)
+    const formatted = formatMathProblem(cleaned)
+    
+    try {
+      return katex.renderToString(formatted, {
+        throwOnError: false,
+        displayMode: true
+      })
+    } catch {
+      return problem
+    }
+  })
+}
+
+function cleanMathText(text: string): string {
+  let cleaned = text
+  
+  cleaned = cleaned.replace(/<[^>]+>/g, '')
+  cleaned = cleaned.replace(/\\\([^)]+\\\)/g, (match) => {
+    return match.replace(/\\\(|\)/g, '')
+  })
+  cleaned = cleaned.replace(/\\\[[^\]]+\\\]/g, (match) => {
+    return match.replace(/\\\[|\\\]/g, '')
+  })
+  cleaned = cleaned.replace(/\*\*/g, '')
+  cleaned = cleaned.replace(/\*/g, ' \\cdot ')
+  cleaned = cleaned.replace(/\^\{?(\d+)\}?/g, '^{$1}')
+  cleaned = cleaned.replace(/\^([a-zA-Z]+)/g, '^{$1}')
+  cleaned = cleaned.replace(/\_\{?(\d+)\}?/g, '_{$1}')
+  cleaned = cleaned.replace(/\n\s*/g, ' ')
+  
+  return cleaned.trim()
+}
+
+function formatMathProblem(text: string): string {
+  let formatted = text
+  
+  formatted = formatted.replace(/(\b(?:sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|abs|lim|int|sum|prod))\s*\(/gi, '$1(')
+  formatted = formatted.replace(/(\b(?:sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|abs|lim|int|sum|prod))\s+([a-zA-Z])/gi, '$1($2)')
+  
+  formatted = formatted.replace(/lim\s+x\s*→\s*(\d+)/gi, '\\lim_{x \\to $1}')
+  formatted = formatted.replace(/lim\s+x\s*→\s*([a-zA-Z]+)/gi, '\\lim_{x \\to $1}')
+  formatted = formatted.replace(/lim\s+x\s*→\s*(\d+(\.\d+)?)/gi, '\\lim_{x \\to $1}')
+  
+  formatted = formatted.replace(/lim_\\{([^}]+)\\}/g, '\\lim_{$1}')
+  formatted = formatted.replace(/lim\\{([^}]+)\\}/g, '\\lim_{$1}')
+  
+  formatted = formatted.replace(/(\d+)\s*\/\s*(\d+)/g, '\\frac{$1}{$2}')
+  formatted = formatted.replace(/([a-zA-Z0-9]+)\s*\/\s*([a-zA-Z0-9]+)/g, '\\frac{$1}{$2}')
+  
+  formatted = formatted.replace(/frac_\\{([^}]+)\\}\\{([^}]+)\\}/g, '\\frac{$1}{$2}')
+  formatted = formatted.replace(/frac\\{([^}]+)\\}\\{([^}]+)\\}/g, '\\frac{$1}{$2}')
+  
+  formatted = formatted.replace(/(\b[a-zA-Z]+\^\d+)/g, (match) => {
+    const parts = match.match(/([a-zA-Z]+)\^(\d+)/)
+    if (parts) {
+      return `${parts[1]}^{${parts[2]}}`
+    }
+    return match
+  })
+  
+  formatted = formatted.replace(/(\b[a-zA-Z]+\_[a-zA-Z0-9]+)/g, (match) => {
+    const parts = match.match(/([a-zA-Z]+)\_([a-zA-Z0-9]+)/)
+    if (parts) {
+      return `${parts[1]}_{${parts[2]}}`
+    }
+    return match
+  })
+  
+  formatted = formatted.replace(/(\b(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)\b)/gi, (match) => {
+    const greekMap: Record<string, string> = {
+      'alpha': '\\alpha', 'beta': '\\beta', 'gamma': '\\gamma',
+      'delta': '\\delta', 'epsilon': '\\epsilon', 'zeta': '\\zeta',
+      'eta': '\\eta', 'theta': '\\theta', 'iota': '\\iota',
+      'kappa': '\\kappa', 'lambda': '\\lambda', 'mu': '\\mu',
+      'nu': '\\nu', 'xi': '\\xi', 'pi': '\\pi', 'rho': '\\rho',
+      'sigma': '\\sigma', 'tau': '\\tau', 'upsilon': '\\upsilon',
+      'phi': '\\phi', 'chi': '\\chi', 'psi': '\\psi', 'omega': '\\omega'
+    }
+    return greekMap[match.toLowerCase()] || match
+  })
+  
+  formatted = formatted.replace(/\b(?:inf|infty|infinity)\b/gi, '\\infty')
+  
+  formatted = formatted.replace(/\\to/g, '\\to')
+  formatted = formatted.replace(/→/g, '\\to')
+  
+  return formatted
+}
 
 const weakPoints = ref<WeakPoint[]>([])
 const recommendations = ref<Recommendation[]>([])
@@ -144,6 +358,14 @@ const report = reactive<RecommendationReport>({
   weak_points: []
 })
 const showAnswers = reactive<Record<number, boolean>>({})
+const agents = ref<AgentInfo[]>([])
+const collaborationStats = reactive<CollaborationStats>({
+  total_collaborations: 0,
+  success_rate: 0,
+  avg_response_time_ms: 0
+})
+const loading = ref(false)
+const selectedSubject = ref('')
 
 const pendingRecommendations = computed(() => recommendations.value.filter((r: Recommendation) => !r.completed))
 const completedRecommendations = computed(() => recommendations.value.filter((r: Recommendation) => r.completed))
@@ -168,14 +390,37 @@ async function loadData() {
     recommendations.value = await getRecommendations()
     const data = await getRecommendationReport()
     Object.assign(report, data)
+    
+    const agentData = await getAgentStatus()
+    agents.value = agentData.agents
+    
+    const logData = await getCollaborationLogs()
+    Object.assign(collaborationStats, logData.stats)
   } catch {
     recommendations.value = []
   }
 }
 
+async function handleToggleAgent(agentName: string, enabled: boolean) {
+  loading.value = true
+  try {
+    const result = await toggleAgent(agentName, enabled)
+    ElMessage.success(result.message)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '操作失败')
+    const idx = agents.value.findIndex(a => a.name === agentName)
+    if (idx !== -1) {
+      agents.value[idx].enabled = !enabled
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
 async function handleGenerate() {
   try {
-    const newRecs = await generateRecommendations(5)
+    const subject = selectedSubject.value || undefined
+    const newRecs = await generateRecommendations(5, subject)
     recommendations.value = [...newRecs, ...recommendations.value]
     const data = await getRecommendationReport()
     Object.assign(report, data)
@@ -216,6 +461,16 @@ onMounted(loadData)
 .page-header h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.generate-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.subject-select {
+  width: 160px;
 }
 
 .stats-row {
@@ -301,6 +556,27 @@ onMounted(loadData)
 .question-label {
   font-weight: 600;
   color: #333;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.question-text, .answer-text, .analysis-text {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #333;
+}
+
+.question-text {
+  white-space: pre-wrap;
+}
+
+.katex {
+  font-size: 1.1em;
+}
+
+.katex-display {
+  margin: 0.5em 0;
+  text-align: center;
 }
 
 .rec-answer {
@@ -313,7 +589,7 @@ onMounted(loadData)
 .answer-section, .analysis-section {
   font-size: 14px;
   line-height: 1.6;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .answer-section:last-child, .analysis-section:last-child {
@@ -323,6 +599,8 @@ onMounted(loadData)
 .answer-label, .analysis-label {
   font-weight: 600;
   color: #333;
+  display: block;
+  margin-bottom: 8px;
 }
 
 .rec-actions {
@@ -349,5 +627,55 @@ onMounted(loadData)
   border-radius: 8px;
   color: #909399;
   justify-content: center;
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.agent-card {
+  padding: 16px;
+  transition: all 0.3s;
+}
+
+.agent-card.agent-disabled {
+  opacity: 0.6;
+  background: #f5f5f5;
+}
+
+.agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.agent-info {
+  flex: 1;
+}
+
+.agent-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.agent-label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.agent-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.more-keywords {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
 }
 </style>

@@ -24,7 +24,7 @@
     "@vitejs/plugin-vue": "^5.0.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.0",
-    "vue-tsc": "^1.8.27"
+    "vue-tsc": "^2.1.4"
   },
   "allowScripts": {
     "esbuild@0.21.5": true,

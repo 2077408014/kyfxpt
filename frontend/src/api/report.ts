@@ -41,9 +41,9 @@ export interface DailyStats {
 }
 
 export async function getStudyReport(period: string = 'week'): Promise<StudyReport> {
-  return await axios.get('/api/report/study', { params: { period } })
+  return await axios.get('/report/study', { params: { period } })
 }
 
 export async function getWeeklyTrend(): Promise<DailyStats[]> {
-  return await axios.get('/api/report/weekly-trend')
+  return await axios.get('/report/weekly-trend')
 }

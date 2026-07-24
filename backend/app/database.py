@@ -48,6 +48,45 @@ def migrate_database():
         if "ai_api_provider" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN ai_api_provider VARCHAR(50)"))
             conn.commit()
+        
+        if "selected_word_category" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN selected_word_category VARCHAR(50)"))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(words)"))
+        word_columns = [row[1] for row in result]
+        if "category" not in word_columns:
+            conn.execute(text("ALTER TABLE words ADD COLUMN category VARCHAR(20) DEFAULT 'CET-4'"))
+            conn.commit()
+
+        # 迁移 words 表：移除 word 字段的 UNIQUE 约束，新增 user_id 字段（支持用户上传词书）
+        if "user_id" not in word_columns:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text("""
+                CREATE TABLE words_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    word VARCHAR(50) NOT NULL,
+                    phonetic VARCHAR(100),
+                    meaning TEXT NOT NULL,
+                    example_sentence TEXT,
+                    difficulty INTEGER NOT NULL DEFAULT 1,
+                    frequency INTEGER NOT NULL DEFAULT 0,
+                    exam_requirement VARCHAR(20) NOT NULL DEFAULT '考纲',
+                    category VARCHAR(20) NOT NULL DEFAULT 'CET-4',
+                    user_id INTEGER,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO words_new (id, word, phonetic, meaning, example_sentence, difficulty, frequency, exam_requirement, category, user_id)
+                SELECT id, word, phonetic, meaning, example_sentence, difficulty, frequency, exam_requirement, category, NULL FROM words
+            """))
+            conn.execute(text("DROP TABLE words"))
+            conn.execute(text("ALTER TABLE words_new RENAME TO words"))
+            conn.execute(text("CREATE INDEX ix_words_word ON words (word)"))
+            conn.execute(text("CREATE INDEX ix_words_user_id ON words (user_id)"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
 
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_study_stats'"))
         if not result.scalar():
@@ -66,7 +105,103 @@ def migrate_database():
             """))
             conn.commit()
 
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_documents'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE knowledge_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    filename VARCHAR(255) NOT NULL,
+                    file_type VARCHAR(20),
+                    file_size INTEGER,
+                    storage_path VARCHAR(500),
+                    subject VARCHAR(50) DEFAULT '未分类',
+                    chunk_count INTEGER DEFAULT 0,
+                    indexed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
+            conn.commit()
+
+        result = conn.execute(text("PRAGMA table_info(knowledge_documents)"))
+        columns = [row[1] for row in result]
+        if "subject" not in columns:
+            conn.execute(text("ALTER TABLE knowledge_documents ADD COLUMN subject VARCHAR(50) DEFAULT '未分类'"))
+            conn.commit()
+
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_collaboration_logs'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE agent_collaboration_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id VARCHAR(64) NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    orchestrator_name VARCHAR(100) NOT NULL,
+                    query TEXT NOT NULL,
+                    context TEXT,
+                    total_time_ms FLOAT NOT NULL,
+                    consulted_agent_count INTEGER NOT NULL DEFAULT 0,
+                    accepted_agent_count INTEGER NOT NULL DEFAULT 0,
+                    recommendation_count INTEGER NOT NULL DEFAULT 0,
+                    success BOOLEAN NOT NULL DEFAULT 1,
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_interaction_logs'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE agent_interaction_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id VARCHAR(64) NOT NULL,
+                    agent_name VARCHAR(100) NOT NULL,
+                    agent_domain VARCHAR(100) NOT NULL,
+                    accepted BOOLEAN NOT NULL DEFAULT 0,
+                    reasoning TEXT,
+                    confidence FLOAT,
+                    response_time_ms FLOAT NOT NULL,
+                    recommendation_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='password_reset_codes'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE password_reset_codes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    code VARCHAR(6) NOT NULL,
+                    expires_at DATETIME NOT NULL,
+                    used BOOLEAN NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
+            conn.commit()
+
+        _seed_default_user(conn)
         _seed_words(conn)
+
+
+def _seed_default_user(conn):
+    result = conn.execute(text("SELECT COUNT(*) FROM users"))
+    count = result.scalar()
+    if count > 0:
+        return
+
+    hashed_password = "$2b$12$Iil8zqQTbTDNGwmEXvXyYexJ69S65ul3vw.CrkTDi0CeVtwrjTVcC"
+    
+    conn.execute(text("""
+        INSERT INTO users (username, email, password, daily_word_count)
+        VALUES ('admin', 'admin@kaoyan.com', :password, 20)
+    """), {"password": hashed_password})
+    conn.commit()
 
 
 def _seed_words(conn):
@@ -110,9 +245,9 @@ def _seed_words(conn):
 
     for word in sample_words:
         conn.execute(
-            text("""INSERT INTO words (word, phonetic, meaning, example_sentence, difficulty, frequency, exam_requirement)
-                    VALUES (:word, :phonetic, :meaning, :example, :diff, :freq, :req)"""),
+            text("""INSERT INTO words (word, phonetic, meaning, example_sentence, difficulty, frequency, exam_requirement, category)
+                    VALUES (:word, :phonetic, :meaning, :example, :diff, :freq, :req, :category)"""),
             {"word": word[0], "phonetic": word[1], "meaning": word[2], "example": word[3],
-             "diff": word[4], "freq": word[5], "req": word[6]}
+             "diff": word[4], "freq": word[5], "req": word[6], "category": "CET-4"}
         )
     conn.commit()

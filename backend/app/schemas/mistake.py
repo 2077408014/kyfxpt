@@ -70,6 +70,8 @@ class MistakeRecognizeResponse(BaseModel):
     knowledge_point: Optional[str] = Field(None, description="建议知识点")
     confidence: float = Field(0.0, description="置信度")
     raw_text: str = Field("", description="原始OCR文本")
+    answer: Optional[str] = Field(None, description="AI生成的正确答案")
+    analysis: Optional[str] = Field(None, description="AI生成的解析")
 
 class SimilarMistakeResponse(BaseModel):
     id: int

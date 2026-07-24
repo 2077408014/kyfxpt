@@ -88,12 +88,16 @@
           </div>
         </el-form-item>
         <el-form-item label="科目" prop="subject">
-          <el-select v-model="addForm.subject" placeholder="请选择科目">
+          <el-combo-box
+            v-model="addForm.subject"
+            placeholder="请选择或输入科目"
+            class="full-width"
+          >
             <el-option label="数学" value="数学" />
             <el-option label="英语" value="英语" />
             <el-option label="政治" value="政治" />
             <el-option label="专业课" value="专业课" />
-          </el-select>
+          </el-combo-box>
         </el-form-item>
         <el-form-item label="知识点">
           <el-input v-model="addForm.knowledge_point" placeholder="可选，AI可自动识别" />
@@ -112,9 +116,7 @@
             <el-option label="困难" value="困难" />
           </el-select>
         </el-form-item>
-        <el-form-item label="题目内容">
-          <el-input v-model="addForm.question_text" type="textarea" :rows="3" placeholder="可选，上传图片后点击AI识别可自动填充" />
-        </el-form-item>
+        
         <el-form-item label="正确答案">
           <el-input v-model="addForm.answer" type="textarea" :rows="2" placeholder="可选" />
         </el-form-item>
@@ -157,17 +159,17 @@
           <span class="label">难度：</span>
           <span>{{ selectedMistake.difficulty || '未填写' }}</span>
         </div>
-        <div class="detail-item">
-          <span class="label">题目：</span>
-          <p>{{ selectedMistake.question_text || '无' }}</p>
+        <div class="detail-item" v-if="selectedMistake.question_text">
+          <span class="label">题目文本：</span>
+          <p>{{ selectedMistake.question_text }}</p>
         </div>
         <div class="detail-item">
           <span class="label">答案：</span>
-          <p>{{ selectedMistake.answer || '暂无' }}</p>
+          <div class="math-content" v-html="renderMathContent(selectedMistake.answer || '暂无')"></div>
         </div>
         <div class="detail-item">
           <span class="label">解析：</span>
-          <p>{{ selectedMistake.analysis || '暂无解析' }}</p>
+          <div class="math-content" v-html="renderMathContent(selectedMistake.analysis || '暂无解析')"></div>
         </div>
         <div class="detail-item">
           <span class="label">错误原因：</span>
@@ -182,24 +184,27 @@
             </el-button>
           </div>
           <div v-if="similarQuestions.length > 0" class="similar-list">
-            <div v-for="item in similarQuestions" :key="item.id" class="similar-item">
-              <div class="similar-info">
-                <el-tag size="small">{{ item.subject }}</el-tag>
-                <el-tag size="small" type="info" v-if="item.knowledge_point">
-                  {{ item.knowledge_point }}
-                </el-tag>
-                <span class="similarity">
-                  相似度: {{ (item.similarity_score * 100).toFixed(0) }}%
-                </span>
+            <div v-for="(item, index) in similarQuestions" :key="index" class="similar-item">
+              <div class="similar-header-row">
+                <span class="similar-number">{{ index + 1 }}.</span>
+                <span class="similar-label">推荐题目</span>
               </div>
-              <p class="similar-question">{{ item.question_text || '无题目文本' }}</p>
+              <div class="similar-question" v-html="renderMathContent(item.question || '')"></div>
+              <div class="similar-answer">
+                <span class="answer-label">答案：</span>
+                <span v-html="renderMathContent(item.answer || '')"></span>
+              </div>
+              <div class="similar-analysis">
+                <span class="analysis-label">解析：</span>
+                <div v-html="renderMathContent(item.analysis || '')"></div>
+              </div>
             </div>
           </div>
           <el-empty v-else-if="!loadingSimilar && hasLoadedSimilar" description="暂无同类题" />
         </div>
       </div>
     </el-dialog>
-    <el-dialog title="重做错题" v-model="showReviewDialog" width="500px">
+    <el-dialog title="重做错题" v-model="showReviewDialog" width="600px">
       <div v-if="reviewingMistake">
         <div v-if="reviewingMistake.image_path" class="review-image">
           <el-image
@@ -209,7 +214,31 @@
             style="max-width: 100%; max-height: 200px"
           />
         </div>
-        <p class="question">{{ reviewingMistake.question_text || '无题目文本，请查看图片' }}</p>
+        
+        <el-form-item>
+          <el-button 
+            type="info" 
+            size="small" 
+            @click="showAnswer = !showAnswer"
+          >
+            {{ showAnswer ? '隐藏答案' : '对答案' }}
+          </el-button>
+        </el-form-item>
+        
+        <div v-if="showAnswer" class="answer-section">
+          <div v-if="reviewingMistake.answer" class="answer-item">
+            <span class="answer-label">正确答案：</span>
+            <span v-html="renderMathContent(reviewingMistake.answer)"></span>
+          </div>
+          <div v-if="reviewingMistake.analysis" class="answer-item">
+            <span class="answer-label">解析：</span>
+            <div v-html="renderMathContent(reviewingMistake.analysis)"></div>
+          </div>
+          <div v-if="!reviewingMistake.answer && !reviewingMistake.analysis" class="no-answer">
+            暂无答案和解析
+          </div>
+        </div>
+        
         <el-form-item label="答题结果">
           <el-radio-group v-model="reviewResult">
             <el-radio label="正确" />
@@ -233,10 +262,49 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Picture } from '@element-plus/icons-vue'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import {
   getMistakes, createMistake, deleteMistake as deleteMistakeApi,
-  reviewMistake as reviewMistakeApi, uploadMistakeImage, recognizeMistake, getSimilarMistakes
+  reviewMistake as reviewMistakeApi, uploadMistakeImage, recognizeMistake
 } from '../api/mistakes'
+import { recommendQuestions, type RecommendQuestion } from '../api/ai'
+
+function renderMathFormula(formula: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(formula.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: false,
+      trust: true
+    })
+  } catch {
+    return `<span class="math-error">${displayMode ? '$$' : '$'}${formula.trim()}${displayMode ? '$$' : '$'}</span>`
+  }
+}
+
+function renderMathContent(text: string): string {
+  if (!text) return ''
+  
+  let result = text
+  
+  result = result.replace(/\$\$(.*?)\$\$/gms, (_, formula) => {
+    const trimmedFormula = formula.trim()
+    if (!trimmedFormula) return '$$'
+    return renderMathFormula(trimmedFormula, true)
+  })
+  
+  result = result.replace(/(?<!\\)\$(.*?)(?<!\\)\$/g, (_, formula) => {
+    const trimmedFormula = formula.trim()
+    if (!trimmedFormula) return '$'
+    if (trimmedFormula.length > 100) {
+      return renderMathFormula(trimmedFormula, true)
+    }
+    return renderMathFormula(trimmedFormula, false)
+  })
+  
+  return result
+}
 
 const mistakes = ref<any[]>([])
 const showAddDialog = ref(false)
@@ -246,9 +314,10 @@ const selectedMistake = ref<any>(null)
 const reviewingMistake = ref<any>(null)
 const reviewResult = ref('')
 const reviewNotes = ref('')
+const showAnswer = ref(false)
 const addFormRef = ref()
 const recognizing = ref(false)
-const similarQuestions = ref<any[]>([])
+const similarQuestions = ref<RecommendQuestion[]>([])
 const loadingSimilar = ref(false)
 const hasLoadedSimilar = ref(false)
 
@@ -339,9 +408,12 @@ async function handleRecognize() {
   recognizing.value = true
   try {
     const result = await recognizeMistake(addForm.image_path)
-    if (result.question_text) addForm.question_text = result.question_text
     if (result.subject) addForm.subject = result.subject
     if (result.knowledge_point) addForm.knowledge_point = result.knowledge_point
+    if (result.difficulty) addForm.difficulty = result.difficulty
+    if (result.error_type) addForm.error_type = result.error_type
+    if (result.answer) addForm.answer = result.answer
+    if (result.analysis) addForm.analysis = result.analysis
     ElMessage.success(`AI识别完成，置信度: ${(result.confidence * 100).toFixed(0)}%`)
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || 'AI识别失败')
@@ -354,8 +426,8 @@ async function handleAdd() {
   if (!addFormRef.value) return
   await addFormRef.value.validate(async (valid: boolean) => {
     if (!valid) return
-    if (!addForm.question_text && !addForm.image_path) {
-      ElMessage.warning('请输入题目内容或上传题目图片')
+    if (!addForm.image_path) {
+      ElMessage.warning('请上传题目图片')
       return
     }
     try {
@@ -381,8 +453,16 @@ async function loadSimilarQuestions() {
   if (!selectedMistake.value) return
   loadingSimilar.value = true
   try {
-    similarQuestions.value = await getSimilarMistakes(selectedMistake.value.id)
+    const result = await recommendQuestions({
+      question_text: selectedMistake.value.question_text || '',
+      subject: selectedMistake.value.subject || '',
+      knowledge_point: selectedMistake.value.knowledge_point || ''
+    })
+    similarQuestions.value = result.questions || []
     hasLoadedSimilar.value = true
+    if (similarQuestions.value.length === 0) {
+      ElMessage.warning('未生成推荐题目，请检查AI配置')
+    }
   } catch (error: any) {
     ElMessage.error('加载推荐失败')
   } finally {
@@ -394,6 +474,7 @@ function openReviewDialog(mistake: any) {
   reviewingMistake.value = mistake
   reviewResult.value = ''
   reviewNotes.value = ''
+  showAnswer.value = false
   showReviewDialog.value = true
 }
 
@@ -522,37 +603,103 @@ async function handleDelete(mistake: any) {
 .similar-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .similar-item {
-  padding: 12px;
+  padding: 16px;
   background: #f5f7fa;
-  border-radius: 8px;
+  border-radius: 10px;
+  border-left: 4px solid #409eff;
 }
 
-.similar-info {
+.similar-header-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
-.similarity {
-  font-size: 12px;
-  color: #999;
+.similar-number {
+  font-weight: bold;
+  color: #409eff;
+  font-size: 15px;
+}
+
+.similar-label {
+  font-weight: bold;
+  color: #333;
+  font-size: 14px;
 }
 
 .similar-question {
-  margin: 0;
+  font-size: 14px;
+  color: #333;
+  line-height: 1.8;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: #fff;
+  border-radius: 6px;
+}
+
+.similar-answer {
+  font-size: 14px;
+  color: #67c23a;
+  line-height: 1.8;
+  margin-bottom: 8px;
+}
+
+.answer-label {
+  font-weight: bold;
+}
+
+.similar-analysis {
   font-size: 13px;
   color: #666;
-  line-height: 1.5;
+  line-height: 1.8;
+  padding: 10px;
+  background: #fff;
+  border-radius: 6px;
+}
+
+.analysis-label {
+  font-weight: bold;
+  color: #909399;
+  display: block;
+  margin-bottom: 6px;
 }
 
 .review-image {
   margin-bottom: 16px;
   text-align: center;
+}
+
+.answer-section {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border-left: 4px solid #667eea;
+}
+
+.answer-item {
+  margin-bottom: 12px;
+}
+
+.answer-item:last-child {
+  margin-bottom: 0;
+}
+
+.answer-label {
+  font-weight: 600;
+  color: #667eea;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.no-answer {
+  color: #999;
+  font-style: italic;
 }
 
 .question {
@@ -561,5 +708,44 @@ async function handleDelete(mistake: any) {
   background: #f5f7fa;
   border-radius: 8px;
   margin-bottom: 20px;
+}
+
+.math-content {
+  margin: 4px 0 0;
+  color: #333;
+  line-height: 1.8;
+}
+
+.math-content :deep(.katex) {
+  font-size: 1.1em;
+}
+
+.math-content :deep(.katex-display) {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.math-content :deep(.katex-display::-webkit-scrollbar) {
+  height: 6px;
+}
+
+.math-content :deep(.katex-display::-webkit-scrollbar-track) {
+  background: #f0f0f0;
+  border-radius: 3px;
+}
+
+.math-content :deep(.katex-display::-webkit-scrollbar-thumb) {
+  background: #c0c0c0;
+  border-radius: 3px;
+}
+
+.math-content :deep(.katex-display::-webkit-scrollbar-thumb:hover) {
+  background: #a0a0a0;
+}
+
+.math-error {
+  color: #e6a23c;
+  font-family: monospace;
 }
 </style>

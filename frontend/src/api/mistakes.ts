@@ -48,6 +48,10 @@ export interface RecognizeResponse {
   knowledge_point: string | null
   confidence: number
   raw_text: string
+  answer: string | null
+  analysis: string | null
+  difficulty: string | null
+  error_type: string | null
 }
 
 export interface SimilarMistake {
@@ -61,45 +65,43 @@ export interface SimilarMistake {
 }
 
 export async function createMistake(data: MistakeCreate): Promise<Mistake> {
-  return await axios.post('/api/mistakes', data)
+  return await axios.post('/mistakes', data)
 }
 
 export async function getMistakes(params?: Record<string, string>): Promise<Mistake[]> {
-  return await axios.get('/api/mistakes', { params })
+  return await axios.get('/mistakes', { params })
 }
 
 export async function getMistake(id: number): Promise<Mistake> {
-  return await axios.get(`/api/mistakes/${id}`)
+  return await axios.get(`/mistakes/${id}`)
 }
 
 export async function updateMistake(id: number, data: Partial<MistakeCreate>): Promise<Mistake> {
-  return await axios.put(`/api/mistakes/${id}`, data)
+  return await axios.put(`/mistakes/${id}`, data)
 }
 
 export async function deleteMistake(id: number): Promise<void> {
-  await axios.delete(`/api/mistakes/${id}`)
+  await axios.delete(`/mistakes/${id}`)
 }
 
 export async function reviewMistake(id: number, data: MistakeReviewCreate): Promise<void> {
-  await axios.post(`/api/mistakes/${id}/review`, data)
+  await axios.post(`/mistakes/${id}/review`, data)
 }
 
 export async function getTodayReviews(): Promise<Mistake[]> {
-  return await axios.get('/api/mistakes/review/today')
+  return await axios.get('/mistakes/review/today')
 }
 
 export async function uploadMistakeImage(file: File): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  return await axios.post('/api/mistakes/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  return await axios.post('/mistakes/upload', formData)
 }
 
 export async function recognizeMistake(imagePath: string): Promise<RecognizeResponse> {
-  return await axios.post('/api/mistakes/recognize', { image_path: imagePath })
+  return await axios.post('/mistakes/recognize', { image_path: imagePath })
 }
 
 export async function getSimilarMistakes(id: number): Promise<SimilarMistake[]> {
-  return await axios.get(`/api/mistakes/${id}/similar`)
+  return await axios.get(`/mistakes/${id}/similar`)
 }

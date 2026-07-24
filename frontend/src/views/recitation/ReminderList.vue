@@ -29,7 +29,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { updateReminder, deleteReminder, type RecitationReminder } from '../../api/politics'
 
-const props = defineProps<{
+defineProps<{
   type: string
   reminders: RecitationReminder[]
 }>()

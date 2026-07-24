@@ -77,9 +77,7 @@ export async function reviewRecitation(id: number, result: string): Promise<Poli
 export async function uploadPoliticsImage(file: File): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  return await axios.post('/api/politics/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  return await axios.post('/api/politics/upload', formData)
 }
 
 export async function recognizePoliticsImage(imagePath: string): Promise<RecognizeResponse> {

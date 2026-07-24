@@ -18,13 +18,15 @@ def calculate_next_review_date(
 
     level_index = MASTERY_LEVELS.index(current_level) if current_level in MASTERY_LEVELS else 0
 
-    interval_index = min(review_count, len(REVIEW_INTERVALS) - 1)
+    interval_index = min(review_count - 1, len(REVIEW_INTERVALS) - 1)
     base_interval = REVIEW_INTERVALS[interval_index]
 
-    if correct_count >= review_count * 0.8:
+    accuracy = correct_count / review_count if review_count > 0 else 0
+
+    if accuracy >= 0.6:
         level_index = min(level_index + 1, len(MASTERY_LEVELS) - 1)
         base_interval = REVIEW_INTERVALS[min(interval_index + 1, len(REVIEW_INTERVALS) - 1)]
-    elif correct_count < review_count * 0.5:
+    elif accuracy < 0.4:
         level_index = max(level_index - 1, 0)
         base_interval = REVIEW_INTERVALS[max(interval_index - 1, 0)]
 

@@ -1,10 +1,10 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
-from datetime import date
+from datetime import date, timedelta
 from ..models.mistake import Mistake, MistakeReview
 from ..schemas.mistake import MistakeCreate, MistakeUpdate, MistakeReviewCreate
-from ..utils.memory_curve import calculate_next_review_date
+from ..utils.memory_curve import calculate_next_review_date, MASTERY_LEVELS, DIFFICULTY_MULTIPLIER, REVIEW_INTERVALS
 
 class MistakeService:
     def create_mistake(self, db: Session, user_id: int, data: MistakeCreate) -> Mistake:
@@ -98,12 +98,20 @@ class MistakeService:
         if data.result == "正确":
             mistake.correct_count += 1
         
-        next_date, new_level = calculate_next_review_date(
-            current_level=mistake.mastery_level,
-            difficulty=mistake.difficulty,
-            review_count=mistake.review_count,
-            correct_count=mistake.correct_count
-        )
+        level_index = MASTERY_LEVELS.index(mistake.mastery_level) if mistake.mastery_level in MASTERY_LEVELS else 0
+        
+        if data.result == "正确":
+            level_index = min(level_index + 1, len(MASTERY_LEVELS) - 1)
+        elif data.result == "错误":
+            level_index = max(level_index - 1, 0)
+        
+        new_level = MASTERY_LEVELS[level_index]
+        
+        multiplier = DIFFICULTY_MULTIPLIER.get(mistake.difficulty, 1.0)
+        interval_index = min(mistake.review_count - 1, len(REVIEW_INTERVALS) - 1)
+        base_interval = REVIEW_INTERVALS[interval_index]
+        adjusted_interval = int(base_interval * multiplier)
+        next_date = date.today() + timedelta(days=adjusted_interval)
         
         mistake.next_review_date = next_date
         mistake.mastery_level = new_level

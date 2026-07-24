@@ -17,6 +17,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/Register.vue')
   },
   {
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('../views/ForgotPassword.vue')
+  },
+  {
     path: '/dashboard',
     name: 'Dashboard',
     component: () => import('../views/Dashboard.vue'),
@@ -52,6 +57,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('../views/AIChat.vue')
       },
       {
+        path: 'ai-config',
+        name: 'AIConfig',
+        component: () => import('../views/AIConfig.vue')
+      },
+      {
         path: 'report',
         name: 'Report',
         component: () => import('../views/Report.vue')
@@ -67,7 +77,8 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('token')
-  if (to.path !== '/login' && to.path !== '/register' && !token) {
+  const publicPaths = ['/login', '/register', '/forgot-password']
+  if (!publicPaths.includes(to.path) && !token) {
     next('/login')
   } else {
     next()

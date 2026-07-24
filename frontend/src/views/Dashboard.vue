@@ -56,8 +56,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getMe } from '../api/auth'
 import { ElMessage } from 'element-plus'
@@ -73,9 +73,14 @@ import {
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const route = useRoute()
 const store = useUserStore()
 const user = ref<any>(null)
-const activeMenu = ref('/dashboard')
+const activeMenu = ref(route.path || '/dashboard')
+
+watch(() => route.path, (newPath) => {
+  activeMenu.value = newPath
+}, { immediate: true })
 
 onMounted(async () => {
   try {
@@ -134,6 +139,25 @@ function handleLogout() {
 .el-menu-item.is-active {
   background: rgba(255, 255, 255, 0.1);
   color: white;
+}
+
+.el-sub-menu .el-menu {
+  background: transparent;
+}
+
+.el-sub-menu .el-menu-item {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.el-sub-menu .el-menu-item:hover,
+.el-sub-menu .el-menu-item.is-active {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.el-menu-item-group {
+  background: transparent;
 }
 
 .logout {

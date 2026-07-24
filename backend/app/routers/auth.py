@@ -1,16 +1,46 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from datetime import timedelta
 from ..database import get_db
 from ..schemas.auth import UserCreate, UserLogin, UserResponse, TokenResponse, AIConfigUpdate
 from ..services.auth_service import auth_service
-from ..utils.jwt import decode_access_token
+from ..utils.jwt import decode_access_token, create_access_token
+from ..config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的访问令牌"
+        )
+    user_id = payload.get("user_id")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的用户ID"
+        )
+    user = auth_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在"
+        )
+    return user
+
+
+async def get_current_user_from_query(token: str = None, db: Session = Depends(get_db)):
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="未提供访问令牌"
+        )
     payload = decode_access_token(token)
     if not payload:
         raise HTTPException(
@@ -51,6 +81,55 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
 async def get_me(current_user = Depends(get_current_user)):
     return current_user
 
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
+    payload = decode_access_token(request.refresh_token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的刷新令牌"
+        )
+    
+    token_type = payload.get("type")
+    if token_type != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的令牌类型"
+        )
+    
+    user_id = payload.get("user_id")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的用户ID"
+        )
+    
+    user = auth_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在"
+        )
+    
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "type": "access"},
+        expires_delta=access_token_expires
+    )
+    
+    refresh_token_expires = timedelta(days=7)
+    new_refresh_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "type": "refresh"},
+        expires_delta=refresh_token_expires
+    )
+    
+    return TokenResponse(access_token=access_token, refresh_token=new_refresh_token)
+
 @router.put("/ai-config", response_model=UserResponse)
 async def update_ai_config(
     config: AIConfigUpdate,
@@ -73,3 +152,35 @@ async def update_ai_config(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    try:
+        auth_service.send_password_reset_code(db, request.email)
+        return {"message": "验证码已发送到您的邮箱，请查收"}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="发送验证码失败，请稍后重试")
+
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    try:
+        auth_service.reset_password(db, request.email, request.code, request.new_password)
+        return {"message": "密码重置成功，请使用新密码登录"}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="密码重置失败，请稍后重试")

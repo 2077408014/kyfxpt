@@ -54,3 +54,59 @@ def clear_history(current_user = Depends(get_current_user), db: Session = Depend
         return {"message": "聊天记录已清除"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/recommend")
+def recommend_questions(
+    data: dict,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        question_text = data.get("question_text", "")
+        subject = data.get("subject", "")
+        knowledge_point = data.get("knowledge_point", "")
+        
+        prompt = f"""请根据以下题目信息，生成3-5道同类练习题。
+
+题目信息：
+科目：{subject}
+知识点：{knowledge_point}
+原题内容：{question_text}
+
+要求：
+1. 生成的题目要与原题同类型、同知识点
+2. 难度要循序渐进
+3. 每道题包含题目描述、正确答案和详细解析
+4. 数学公式必须使用LaTeX格式，行内公式用$...$包裹，独立公式用$$...$$包裹
+5. 输出格式为JSON数组，每个元素包含：
+   - question: 题目描述
+   - answer: 正确答案
+   - analysis: 解析过程
+
+输出示例：
+[
+  {{
+    "question": "题目内容",
+    "answer": "答案",
+    "analysis": "解析"
+  }}
+]
+"""
+        
+        result = ai_service.chat(db, current_user.id, prompt)
+        answer_text = result.get("answer", "")
+        
+        import re
+        json_match = re.search(r'\[.*\]', answer_text, re.DOTALL)
+        if json_match:
+            import json
+            try:
+                questions = json.loads(json_match.group(0))
+                return {"questions": questions}
+            except json.JSONDecodeError:
+                pass
+        
+        return {"questions": [], "raw_response": answer_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

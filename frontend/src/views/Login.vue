@@ -16,6 +16,9 @@
           </el-button>
         </el-form-item>
       </el-form>
+      <p class="forgot-link">
+        <router-link to="/forgot-password">忘记密码？</router-link>
+      </p>
       <p class="register-link">
         还没有账号？<router-link to="/register">立即注册</router-link>
       </p>
@@ -53,6 +56,7 @@ async function handleLogin() {
     try {
       const response = await login(form)
       store.setToken(response.access_token)
+      localStorage.setItem('refresh_token', response.refresh_token)
       await router.push('/dashboard')
       ElMessage.success('登录成功')
     } catch (error: any) {
@@ -91,6 +95,21 @@ async function handleLogin() {
   text-align: center;
   color: #999;
   margin-bottom: 30px;
+}
+
+.forgot-link {
+  text-align: right;
+  margin-top: 10px;
+}
+
+.forgot-link a {
+  color: #667eea;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.forgot-link a:hover {
+  text-decoration: underline;
 }
 
 .register-link {

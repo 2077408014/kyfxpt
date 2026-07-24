@@ -4,7 +4,7 @@
       <div class="chat-header">
         <h2>AI智能助手</h2>
         <div class="header-actions">
-          <el-button type="text" @click="showConfigDialog = true">
+          <el-button type="text" @click="goToConfig">
             <el-icon><Tools /></el-icon>AI配置
           </el-button>
           <el-button type="text" @click="handleClearHistory">
@@ -21,7 +21,12 @@
           <div class="content">
             <p v-if="msg.role === 'user'">{{ msg.content }}</p>
             <div v-else class="ai-content" v-html="renderMarkdown(msg.content)"></div>
-            <span v-if="msg.source" class="source">{{ msg.source }}</span>
+            <div v-if="msg.role === 'ai'" class="message-meta">
+              <span v-if="msg.fromKnowledgeBase" class="knowledge-badge">
+                <el-icon><DataLine /></el-icon>知识库
+              </span>
+              <span v-if="msg.source" class="source">{{ msg.source }}</span>
+            </div>
           </div>
         </div>
         <div v-if="suggestions.length > 0" class="suggestions">
@@ -37,20 +42,19 @@
         </div>
       </div>
       <div class="chat-input">
-        <el-input
-          v-model="inputMessage"
-          placeholder="输入你的问题或指令..."
-          type="textarea"
-          :rows="2"
-          :disabled="loading"
-          @keyup.enter="handleSend"
-        >
-          <template #append>
-            <el-button type="primary" @click="handleSend" :loading="loading">
-              <el-icon><Refresh /></el-icon>发送
-            </el-button>
-          </template>
-        </el-input>
+        <div class="input-row">
+          <el-input
+            v-model="inputMessage"
+            placeholder="输入你的问题或指令..."
+            type="textarea"
+            :rows="2"
+            :disabled="loading"
+            @keyup.enter="handleSend"
+          />
+          <el-button type="primary" @click="handleSend" :loading="loading" class="send-btn">
+            <el-icon><Refresh /></el-icon>发送
+          </el-button>
+        </div>
       </div>
     </div>
     <div class="sidebar">
@@ -73,51 +77,23 @@
         </ul>
       </div>
     </div>
-
-    <el-dialog v-model="showConfigDialog" title="AI配置" width="500px">
-      <el-form :model="aiConfig" label-width="120px">
-        <el-form-item label="AI服务提供商">
-          <el-select v-model="aiConfig.provider" @change="handleProviderChange">
-            <el-option label="DeepSeek" value="deepseek" />
-            <el-option label="智谱AI" value="zhipu" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="自定义" value="custom" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input v-model="aiConfig.apiKey" type="password" placeholder="请输入您的API Key" />
-        </el-form-item>
-        <el-form-item label="API Base URL">
-          <el-input v-model="aiConfig.baseUrl" placeholder="API接口地址" />
-        </el-form-item>
-        <el-form-item label="模型名称">
-          <el-input v-model="aiConfig.model" placeholder="模型名称" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showConfigDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveAIConfig">保存配置</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Message, Delete, Refresh, Tools } from '@element-plus/icons-vue'
+import { User, Message, Delete, Refresh, Tools, DataLine } from '@element-plus/icons-vue'
 import { chat, command, getHistory, clearHistory } from '../api/ai'
-import { getMe, updateAIConfig, type User as UserType } from '../api/auth'
+import { ragChat, type RAGChatResult } from '../api/rag'
 import { marked } from 'marked'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
 marked.setOptions({
   breaks: true,
-  gfm: true,
-  sanitize: false,
-  mangle: false
+  gfm: true
 })
 
 const router = useRouter()
@@ -125,68 +101,10 @@ const messages = ref<any[]>([])
 const inputMessage = ref('')
 const loading = ref(false)
 const suggestions = ref<string[]>([])
-const showConfigDialog = ref(false)
 const chatContainerRef = ref<HTMLElement | null>(null)
 
-const aiConfig = reactive({
-  provider: '',
-  apiKey: '',
-  baseUrl: '',
-  model: ''
-})
-
-const providerDefaults: Record<string, { baseUrl: string; model: string }> = {
-  deepseek: {
-    baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat'
-  },
-  zhipu: {
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4'
-  },
-  openai: {
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-3.5-turbo'
-  },
-  custom: {
-    baseUrl: '',
-    model: ''
-  }
-}
-
-function handleProviderChange() {
-  const defaults = providerDefaults[aiConfig.provider]
-  if (defaults) {
-    aiConfig.baseUrl = defaults.baseUrl
-    aiConfig.model = defaults.model
-  }
-}
-
-async function loadAIConfig() {
-  try {
-    const user: UserType = await getMe()
-    if (user.ai_api_provider) {
-      aiConfig.provider = user.ai_api_provider
-      handleProviderChange()
-    }
-  } catch {
-    // ignore
-  }
-}
-
-async function saveAIConfig() {
-  try {
-    await updateAIConfig({
-      ai_api_provider: aiConfig.provider || undefined,
-      ai_api_key: aiConfig.apiKey || undefined,
-      ai_api_base_url: aiConfig.baseUrl || undefined,
-      ai_api_model: aiConfig.model || undefined
-    })
-    ElMessage.success('AI配置保存成功')
-    showConfigDialog.value = false
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '保存失败')
-  }
+function goToConfig() {
+  router.push('/dashboard/ai-config')
 }
 
 function renderMathFormula(formula: string, displayMode: boolean): string {
@@ -202,13 +120,43 @@ function renderMathFormula(formula: string, displayMode: boolean): string {
   }
 }
 
+function normalizeLatex(formula: string): string {
+  let result = formula
+  
+  result = result.replace(/\\lim_\{([^}]+)\}/g, '\\lim_{$1}')
+  result = result.replace(/\\lim\s*\{([^}]+)\}/g, '\\lim_{$1}')
+  result = result.replace(/lim_\(([^)]+)\)/g, '\\lim_{$1}')
+  result = result.replace(/lim_\(([^)]+)\)/g, '\\lim_{$1}')
+  result = result.replace(/lim\s*([a-zA-Z]+)\s*[-→]\s*([0-9a-zA-Z]+)/g, '\\lim_{$1 \\to $2}')
+  
+  result = result.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '\\frac{$1}{$2}')
+  result = result.replace(/\\frac\(([^)]+)\)\(([^)]+)\)/g, '\\frac{$1}{$2}')
+  
+  const mathCommands = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'ln', 'log', 'sqrt', 'int', 'sum', 'to', 'cdot', 'infty', 'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'theta', 'lambda', 'mu', 'pi', 'rho', 'sigma', 'phi', 'psi', 'omega']
+  for (const cmd of mathCommands) {
+    const regex = new RegExp(`\\\\${cmd}`, 'g')
+    result = result.replace(regex, `\\${cmd}`)
+  }
+  
+  result = result.replace(/\^\{([^}]+)\}/g, '^{$1}')
+  result = result.replace(/\^([a-zA-Z0-9]+)/g, '^{$1}')
+  result = result.replace(/_\{([^}]+)\}/g, '_{$1}')
+  result = result.replace(/_([a-zA-Z0-9]+)/g, '_{$1}')
+  
+  result = result.replace(/\*/g, ' \\cdot ')
+  result = result.replace(/inf/g, '\\infty')
+  
+  return result.trim()
+}
+
 function renderMarkdown(text: string): string {
   let result = text || ''
   
   const mathBlocks: { placeholder: string; html: string }[] = []
   
   const addMathBlock = (formula: string, displayMode: boolean): string => {
-    const html = renderMathFormula(formula, displayMode)
+    const normalized = normalizeLatex(formula)
+    const html = renderMathFormula(normalized, displayMode)
     const placeholder = `@@MATH_${displayMode ? 'BLOCK' : 'INLINE'}_${mathBlocks.length}@@`
     mathBlocks.push({ placeholder, html })
     return placeholder
@@ -229,33 +177,41 @@ function renderMarkdown(text: string): string {
     return addMathBlock(trimmedFormula, false)
   })
   
-  const standaloneMathPatterns = [
-    /lim_{[^}]+}\s+[^$]+/g,
-    /\\frac{[^}]+}{[^}]+}/g,
-    /\\int[^$]+/g,
-    /\\sum_{[^}]+}[^$]+/g,
-    /\\frac{d[^}]+}{d[^}]+}/g,
-    /\\frac{\\partial[^}]+}{\\partial[^}]+}/g,
-    /\\sqrt{[^}]+}/g,
-    /\\sin\s*\([^)]+\)/g,
-    /\\cos\s*\([^)]+\)/g,
-    /\\tan\s*\([^)]+\)/g,
-    /\\ln\s*\([^)]+\)/g,
-    /\\log\s*\([^)]+\)/g,
-    /\\exp\s*\([^)]+\)/g,
-    /\\alpha|\\beta|\\gamma|\\delta|\\epsilon|\\zeta|\\eta|\\theta|\\iota|\\kappa|\\lambda|\\mu|\\nu|\\xi|\\pi|\\rho|\\sigma|\\tau|\\upsilon|\\phi|\\chi|\\psi|\\omega/gi,
-    /\\Delta|\\Gamma|\\Theta|\\Lambda|\\Xi|\\Pi|\\Sigma|\\Upsilon|\\Phi|\\Psi|\\Omega/gi,
-    /\\frac\{[^\}]+\}\{[^\}]+\}/g,
-    /\\sum\{[^\}]+\}[^$]+/g,
-    /\\int\{[^\}]+\}[^$]+/g,
-    /\\lim\{[^\}]+\}\s+[^$]+/g
-  ]
+  result = result.replace(/\\\((.*?)\\\)/g, (_, formula) => {
+    const trimmedFormula = formula.trim()
+    if (!trimmedFormula) return '\\()'
+    return addMathBlock(trimmedFormula, false)
+  })
   
-  standaloneMathPatterns.forEach((pattern) => {
-    result = result.replace(pattern, (match) => {
-      if (match.includes('@@MATH_')) return match
-      return addMathBlock(match, false)
-    })
+  result = result.replace(/\\\[([\s\S]*?)\\\]/g, (_, formula) => {
+    const trimmedFormula = formula.trim()
+    if (!trimmedFormula) return '\\[]'
+    return addMathBlock(trimmedFormula, true)
+  })
+  
+  result = result.replace(/\[([\s\S]*?)\]/g, (_, formula) => {
+    const trimmedFormula = formula.trim()
+    if (!trimmedFormula) return '[]'
+    if (trimmedFormula.includes('\\') || trimmedFormula.includes('lim') || trimmedFormula.includes('frac') || trimmedFormula.includes('int') || trimmedFormula.includes('sum') || trimmedFormula.includes('sin') || trimmedFormula.includes('cos') || trimmedFormula.includes('tan')) {
+      return addMathBlock(trimmedFormula, true)
+    }
+    return '[' + trimmedFormula + ']'
+  })
+  
+  const mathPattern = /((?:\\frac\{[^}]+\}\{[^}]+\})|(?:\\lim\{[^}]+\})|(?:\\int[^}]+)|(?:\\sum[^}]+)|(?:\\sin|\\cos|\\tan|\\cot|\\sec|\\csc|\\ln|\\log|\\exp|\\sqrt)\s*\([^)]+\)|(?:\\alpha|\\beta|\\gamma|\\delta|\\epsilon|\\zeta|\\eta|\\theta|\\iota|\\kappa|\\lambda|\\mu|\\nu|\\xi|\\pi|\\rho|\\sigma|\\tau|\\upsilon|\\phi|\\chi|\\psi|\\omega|\\Delta|\\Gamma|\\Theta|\\Lambda|\\Xi|\\Pi|\\Sigma|\\Upsilon|\\Phi|\\Psi|\\Omega))/gi
+  
+  result = result.replace(mathPattern, (match) => {
+    if (match.includes('@@MATH_')) return match
+    const isDisplayMode = match.length > 50 || match.includes('lim') || match.includes('int') || match.includes('sum') || match.includes('frac')
+    return addMathBlock(match, isDisplayMode)
+  })
+  
+  const simpleMathPattern = /((?:\\frac\{[^}]+\}\{[^}]+\})|(?:\\lim\{[^}]+\})|(?:\\int[^}]+)|(?:\\sum[^}]+)|(?:\\sin|\\cos|\\tan|\\cot|\\sec|\\csc|\\ln|\\log|\\exp|\\sqrt)\s*\([^)]+\))/gi
+  
+  result = result.replace(simpleMathPattern, (match) => {
+    if (match.includes('@@MATH_')) return match
+    const isDisplayMode = match.length > 50 || match.includes('lim') || match.includes('int') || match.includes('sum') || match.includes('frac')
+    return addMathBlock(match, isDisplayMode)
   })
   
   const parsedMarkdown = marked.parse(result)
@@ -318,45 +274,60 @@ async function handleSend() {
   loading.value = true
   
   try {
-    const result = await chat(userMsg)
+    const ragResult: RAGChatResult = await ragChat(userMsg)
     
     messages.value.push({
       id: Date.now() + 1,
       role: 'ai',
-      content: result.answer,
-      source: result.category
+      content: ragResult.answer,
+      source: ragResult.source || (ragResult.from_knowledge_base ? '知识库' : 'AI'),
+      fromKnowledgeBase: ragResult.from_knowledge_base,
+      relevantChunks: ragResult.relevant_chunks
     })
     
-    if (result.suggestions && result.suggestions.length > 0) {
-      suggestions.value = result.suggestions
-    }
-    
-    handleRouteNavigation(result.answer)
+    handleRouteNavigation(userMsg)
   } catch (error: any) {
-    messages.value.push({
-      id: Date.now() + 1,
-      role: 'ai',
-      content: error.response?.data?.detail || '抱歉，我暂时无法回答这个问题。',
-      source: 'AI系统'
-    })
+    try {
+      const result = await chat(userMsg)
+      
+      messages.value.push({
+        id: Date.now() + 1,
+        role: 'ai',
+        content: result.answer,
+        source: result.category,
+        fromKnowledgeBase: false
+      })
+      
+      handleRouteNavigation(userMsg)
+    } catch (err: any) {
+      messages.value.push({
+        id: Date.now() + 1,
+        role: 'ai',
+        content: err.response?.data?.detail || '抱歉，我暂时无法回答这个问题。',
+        source: 'AI系统',
+        fromKnowledgeBase: false
+      })
+    }
   } finally {
     loading.value = false
   }
 }
 
-function handleRouteNavigation(answer: string) {
-  const routes: Record<string, string> = {
-    '错题': '/dashboard/mistakes',
-    '单词': '/dashboard/words',
-    '推荐': '/dashboard/recommend',
-    '薄弱': '/dashboard/recommend',
-    '计划': '/dashboard/words',
-    '报告': '/dashboard/report'
-  }
+function handleRouteNavigation(userMessage: string) {
+  const commands: Array<{ keywords: string[]; route: string }> = [
+    { keywords: ['打开错题', '去错题', '错题管理', '跳转错题'], route: '/dashboard/mistakes' },
+    { keywords: ['打开单词', '去单词', '背诵中心', '单词复习', '跳转单词'], route: '/dashboard/words' },
+    { keywords: ['打开推荐', '去推荐', '智能推荐', '跳转推荐', '生成推荐'], route: '/dashboard/recommend' },
+    { keywords: ['打开报告', '去报告', '学习报告', '跳转报告'], route: '/dashboard/report' },
+    { keywords: ['打开首页', '去首页', '跳转首页'], route: '/dashboard' },
+    { keywords: ['打开资料', '去资料', '资料管理', '跳转资料'], route: '/dashboard/resources' },
+    { keywords: ['打开ai配置', 'ai配置', '跳转ai配置'], route: '/dashboard/ai-config' }
+  ]
   
-  for (const [keyword, route] of Object.entries(routes)) {
-    if (answer.includes(keyword)) {
-      setTimeout(() => router.push(route), 1500)
+  const lowerMessage = userMessage.toLowerCase()
+  for (const cmd of commands) {
+    if (cmd.keywords.some(kw => lowerMessage.includes(kw))) {
+      router.push(cmd.route)
       break
     }
   }
@@ -407,7 +378,6 @@ async function handleClearHistory() {
 
 onMounted(() => {
   loadHistory()
-  loadAIConfig()
 })
 </script>
 
@@ -416,7 +386,7 @@ onMounted(() => {
   padding: 20px;
   display: flex;
   gap: 20px;
-  height: calc(100vh - 80px);
+  min-height: calc(100vh - 80px);
 }
 
 .chat-container {
@@ -563,10 +533,31 @@ onMounted(() => {
   padding: 0;
 }
 
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.knowledge-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.knowledge-badge .el-icon {
+  font-size: 12px;
+}
+
 .source {
   font-size: 12px;
   color: #999;
-  margin-left: 8px;
 }
 
 .message.user .source {
@@ -588,6 +579,21 @@ onMounted(() => {
 .chat-input {
   padding: 20px;
   border-top: 1px solid #e0e0e0;
+}
+
+.input-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.input-row .el-textarea {
+  flex: 1;
+}
+
+.send-btn {
+  height: 40px;
+  flex-shrink: 0;
 }
 
 .sidebar {

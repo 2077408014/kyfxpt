@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import engine, Base, migrate_database
-from .routers import auth, mistakes, words, politics, recommendation, resources, ai, report
+from .models import User, Mistake, Word, Resource, Recommendation, AIChatHistory, UserStudyStat, PoliticsRecitation, KnowledgeDocument
+from .routers import auth, mistakes, words, politics, recommendation, resources, ai, report, rag
 from .config import UPLOAD_PATH
 
 Base.metadata.create_all(bind=engine)
@@ -27,6 +28,7 @@ app.include_router(politics.router)
 app.include_router(recommendation.router)
 app.include_router(resources.router)
 app.include_router(ai.router)
+app.include_router(rag.router)
 app.include_router(report.router)
 
 @app.get("/")
