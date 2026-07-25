@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import re
+import json
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -71,6 +72,32 @@ async def upload_mistake_image(
         "image_url": f"/uploads/mistakes/{filename}"
     }
 
+def _clean_markdown_json(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(r'^```json\s*', '', cleaned)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    cleaned = re.sub(r'^```\s*', '', cleaned)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    cleaned = re.sub(r'^["\']?json["\']?\s*', '', cleaned)
+    cleaned = cleaned.strip()
+    return cleaned
+
+def _validate_json_schema(data: dict) -> bool:
+    required_fields = ["subject", "knowledge_point", "question_text", "answer", "analysis", "difficulty", "error_type"]
+    for field in required_fields:
+        if field not in data:
+            return False
+    valid_subjects = ["数学", "英语", "政治", "专业课", ""]
+    if data.get("subject") not in valid_subjects:
+        return False
+    valid_difficulties = ["简单", "中等", "困难", ""]
+    if data.get("difficulty") not in valid_difficulties:
+        return False
+    valid_error_types = ["概念错误", "计算错误", "审题错误", ""]
+    if data.get("error_type") not in valid_error_types:
+        return False
+    return True
+
 @router.post("/recognize", response_model=MistakeRecognizeResponse)
 async def recognize_mistake(
     data: MistakeRecognizeRequest,
@@ -85,55 +112,90 @@ async def recognize_mistake(
     
     question_text = result.get("question_text", "")
     
+    if not question_text:
+        result["answer"] = None
+        result["analysis"] = "图片中未识别到题目内容"
+        result["confidence"] = 0.0
+        return result
+    
     try:
         from ..services.ai_service import ai_service
         
-        prompt = f"""请分析以下图片中的考研题目内容，提取相关信息。
+        prompt = f"""你是一个专业的考研题目分析助手。请分析以下题目内容，提取并生成以下信息：
 
-图片识别文本：
+题目内容：
 {question_text}
 
-请按照以下格式输出JSON：
+请严格按照以下JSON格式输出，不要包含任何额外内容：
 {{
-  "subject": "科目名称（如数学、英语、政治、专业课）",
-  "knowledge_point": "知识点名称",
+  "subject": "科目名称（只能是：数学/英语/政治/专业课）",
+  "knowledge_point": "知识点名称（如：高等数学-极限、线性代数-矩阵等）",
   "question_text": "题目完整描述",
-  "answer": "正确答案",
-  "analysis": "详细解析过程，数学公式使用LaTeX格式，行内公式用$...$包裹，独立公式用$$...$$包裹",
-  "difficulty": "难度等级（简单/中等/困难）",
-  "error_type": "错误类型（概念模糊/计算错误/审题失误/其他）"
+  "answer": "正确答案（数学公式使用LaTeX格式，行内公式用$...$包裹，独立公式用$$...$$包裹）",
+  "analysis": "详细解析过程，包含解题步骤和公式（数学公式使用LaTeX格式）",
+  "difficulty": "难度等级（只能是：简单/中等/困难）",
+  "error_type": "错误类型（只能是：概念错误/计算错误/审题错误）"
 }}
 
 要求：
-1. 如果识别到的不是考研题目，请将subject设为""，其他字段也设为""
-2. 确保输出是合法的JSON格式
-3. 解析要清晰易懂，帮助理解解题思路
+1. 如果无法识别为考研题目，所有字段返回空字符串""
+2. 答案和解析中的数学公式必须使用标准LaTeX格式
+3. 输出必须是合法的JSON格式，不能包含markdown代码块标记或任何解释文字
+4. 字段值必须严格匹配给定的选项范围，不要使用其他词汇
 """
         
-        ai_result = ai_service.chat(db, current_user.id, prompt)
-        answer_text = ai_result.get("answer", "")
+        max_retries = 2
+        ai_data = None
+        last_error = ""
         
-        try:
-            import json
-            json_match = re.search(r'\{[\s\S]*\}', answer_text)
-            if json_match:
+        for attempt in range(max_retries + 1):
+            try:
+                ai_result = ai_service.chat(db, current_user.id, prompt)
+                answer_text = ai_result.get("answer", "")
+                
+                print(f"[AI识别] AI原始返回: {repr(answer_text[:500])}...")
+                
+                cleaned_text = _clean_markdown_json(answer_text)
+                
+                json_match = re.search(r'\{[\s\S]*\}', cleaned_text)
+                if not json_match:
+                    raise ValueError("未找到JSON内容")
+                
                 ai_data = json.loads(json_match.group(0))
-                result["subject"] = ai_data.get("subject", result.get("subject", ""))
-                result["knowledge_point"] = ai_data.get("knowledge_point", result.get("knowledge_point", ""))
-                result["question_text"] = ai_data.get("question_text", question_text)
-                result["answer"] = ai_data.get("answer", "")
-                result["analysis"] = ai_data.get("analysis", "")
-                result["difficulty"] = ai_data.get("difficulty", "")
-                result["error_type"] = ai_data.get("error_type", "")
-                result["confidence"] = 1.0
-            else:
-                result["answer"] = None
-                result["analysis"] = "AI未能解析出有效的JSON格式，请重新尝试"
-                result["confidence"] = 0.5
-        except json.JSONDecodeError:
+                
+                if not _validate_json_schema(ai_data):
+                    raise ValueError("JSON schema验证失败")
+                
+                break
+            except json.JSONDecodeError as e:
+                last_error = f"JSON解析错误: {str(e)}"
+                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+            except ValueError as e:
+                last_error = str(e)
+                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+            except Exception as e:
+                last_error = f"未知错误: {str(e)}"
+                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+        
+        if ai_data and _validate_json_schema(ai_data):
+            result["subject"] = ai_data.get("subject", result.get("subject", ""))
+            result["knowledge_point"] = ai_data.get("knowledge_point", result.get("knowledge_point", ""))
+            result["question_text"] = ai_data.get("question_text", question_text)
+            result["answer"] = ai_data.get("answer", "")
+            result["analysis"] = ai_data.get("analysis", "")
+            result["difficulty"] = ai_data.get("difficulty", "")
+            result["error_type"] = ai_data.get("error_type", "")
+            result["confidence"] = 1.0
+        else:
             result["answer"] = None
-            result["analysis"] = "AI返回的内容格式不正确，请重新尝试"
-            result["confidence"] = 0.5
+            result["analysis"] = f"AI返回的内容格式不正确，已重试{max_retries}次，请重新尝试。错误信息: {last_error}"
+            result["confidence"] = 0.3
     except Exception as e:
         print(f"[AI] 识别失败: {e}")
         result["answer"] = None

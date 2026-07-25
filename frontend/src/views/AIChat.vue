@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="ai-chat">
     <div class="chat-container">
       <div class="chat-header">
@@ -102,6 +102,7 @@ const inputMessage = ref('')
 const loading = ref(false)
 const suggestions = ref<string[]>([])
 const chatContainerRef = ref<HTMLElement | null>(null)
+const lastSentTime = ref(0)
 
 function goToConfig() {
   router.push('/dashboard/ai-config')
@@ -261,21 +262,35 @@ async function handleSend() {
     }
     return
   }
+
+  const now = Date.now()
+  if (now - lastSentTime.value < 500) {
+    return
+  }
+
+  const userMsg = inputMessage.value.trim()
   
+  loading.value = true
+  inputMessage.value = ''
+  lastSentTime.value = now
+  
+  const lastMessage = messages.value[messages.value.length - 1]
+  if (lastMessage && lastMessage.role === 'user' && lastMessage.content === userMsg) {
+    loading.value = false
+    return
+  }
+
   messages.value.push({
     id: Date.now(),
     role: 'user',
-    content: inputMessage.value
+    content: userMsg
   })
-  
-  const userMsg = inputMessage.value
-  inputMessage.value = ''
+
   suggestions.value = []
-  loading.value = true
-  
+
   try {
     const ragResult: RAGChatResult = await ragChat(userMsg)
-    
+
     messages.value.push({
       id: Date.now() + 1,
       role: 'ai',
@@ -284,30 +299,16 @@ async function handleSend() {
       fromKnowledgeBase: ragResult.from_knowledge_base,
       relevantChunks: ragResult.relevant_chunks
     })
-    
+
     handleRouteNavigation(userMsg)
   } catch (error: any) {
-    try {
-      const result = await chat(userMsg)
-      
-      messages.value.push({
-        id: Date.now() + 1,
-        role: 'ai',
-        content: result.answer,
-        source: result.category,
-        fromKnowledgeBase: false
-      })
-      
-      handleRouteNavigation(userMsg)
-    } catch (err: any) {
-      messages.value.push({
-        id: Date.now() + 1,
-        role: 'ai',
-        content: err.response?.data?.detail || '抱歉，我暂时无法回答这个问题。',
-        source: 'AI系统',
-        fromKnowledgeBase: false
-      })
-    }
+    messages.value.push({
+      id: Date.now() + 1,
+      role: 'ai',
+      content: error.response?.data?.detail || '抱歉，我暂时无法回答这个问题。',
+      source: 'AI系统',
+      fromKnowledgeBase: false
+    })
   } finally {
     loading.value = false
   }
@@ -335,10 +336,23 @@ function handleRouteNavigation(userMessage: string) {
 
 async function sendCommand(cmd: string) {
   inputMessage.value = cmd
-  handleSend()
   
   try {
     const result = await command(cmd)
+    
+    messages.value.push({
+      id: Date.now(),
+      role: 'user',
+      content: cmd
+    })
+    
+    messages.value.push({
+      id: Date.now() + 1,
+      role: 'ai',
+      content: result.message,
+      source: '指令系统',
+      fromKnowledgeBase: false
+    })
     
     if (result.action === 'open_mistakes') {
       setTimeout(() => router.push('/dashboard/mistakes'), 1000)

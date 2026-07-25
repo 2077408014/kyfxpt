@@ -46,10 +46,11 @@
       </el-table-column>
       <el-table-column prop="next_review_date" label="下次复习" width="120" />
       <el-table-column prop="review_count" label="复习次数" width="100" />
-      <el-table-column label="操作" width="200">
+      <el-table-column label="操作" width="280">
         <template #default="scope">
           <el-button @click="viewMistake(scope.row)">查看</el-button>
           <el-button @click="openReviewDialog(scope.row)">重做</el-button>
+          <el-button type="primary" @click="openEditDialog(scope.row)">修改</el-button>
           <el-button type="danger" @click="handleDelete(scope.row)">删除</el-button>
         </template>
       </el-table-column>
@@ -88,16 +89,16 @@
           </div>
         </el-form-item>
         <el-form-item label="科目" prop="subject">
-          <el-combo-box
+          <el-select
             v-model="addForm.subject"
-            placeholder="请选择或输入科目"
+            placeholder="请选择科目"
             class="full-width"
           >
             <el-option label="数学" value="数学" />
             <el-option label="英语" value="英语" />
             <el-option label="政治" value="政治" />
             <el-option label="专业课" value="专业课" />
-          </el-combo-box>
+          </el-select>
         </el-form-item>
         <el-form-item label="知识点">
           <el-input v-model="addForm.knowledge_point" placeholder="可选，AI可自动识别" />
@@ -255,6 +256,48 @@
         <el-button type="primary" @click="handleReview">确认提交</el-button>
       </template>
     </el-dialog>
+    <el-dialog title="编辑错题" v-model="editDialogVisible" width="650px">
+      <el-form ref="editFormRef" :model="editForm" label-width="100px">
+        <el-form-item label="科目">
+          <el-select v-model="editForm.subject" placeholder="请选择科目" class="full-width">
+            <el-option label="数学" value="数学" />
+            <el-option label="英语" value="英语" />
+            <el-option label="政治" value="政治" />
+            <el-option label="专业课" value="专业课" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="知识点">
+          <el-input v-model="editForm.knowledge_point" placeholder="知识点" />
+        </el-form-item>
+        <el-form-item label="错误类型">
+          <el-select v-model="editForm.error_type" placeholder="错误类型" clearable class="full-width">
+            <el-option label="概念错误" value="概念错误" />
+            <el-option label="计算错误" value="计算错误" />
+            <el-option label="审题错误" value="审题错误" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="难度">
+          <el-select v-model="editForm.difficulty" placeholder="难度" clearable class="full-width">
+            <el-option label="简单" value="简单" />
+            <el-option label="中等" value="中等" />
+            <el-option label="困难" value="困难" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="正确答案">
+          <el-input v-model="editForm.answer" type="textarea" :rows="3" placeholder="正确答案" />
+        </el-form-item>
+        <el-form-item label="解析">
+          <el-input v-model="editForm.analysis" type="textarea" :rows="3" placeholder="解析" />
+        </el-form-item>
+        <el-form-item label="错误原因">
+          <el-input v-model="editForm.error_reason" type="textarea" :rows="2" placeholder="错误原因" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -265,7 +308,8 @@ import { Plus, Picture } from '@element-plus/icons-vue'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import {
-  getMistakes, createMistake, deleteMistake as deleteMistakeApi,
+  getMistakes, createMistake, updateMistake as updateMistakeApi,
+  deleteMistake as deleteMistakeApi,
   reviewMistake as reviewMistakeApi, uploadMistakeImage, recognizeMistake
 } from '../api/mistakes'
 import { recommendQuestions, type RecommendQuestion } from '../api/ai'
@@ -320,6 +364,19 @@ const recognizing = ref(false)
 const similarQuestions = ref<RecommendQuestion[]>([])
 const loadingSimilar = ref(false)
 const hasLoadedSimilar = ref(false)
+
+const editDialogVisible = ref(false)
+const editFormRef = ref()
+const editForm = reactive({
+  subject: '',
+  knowledge_point: '',
+  error_type: '',
+  difficulty: '',
+  answer: '',
+  analysis: '',
+  error_reason: ''
+})
+const editingId = ref<number | null>(null)
 
 const filters = reactive({
   subject: '',
@@ -493,6 +550,38 @@ async function handleReview() {
     loadMistakes()
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '提交失败')
+  }
+}
+
+function openEditDialog(mistake: any) {
+  editingId.value = mistake.id
+  editForm.subject = mistake.subject || ''
+  editForm.knowledge_point = mistake.knowledge_point || ''
+  editForm.error_type = mistake.error_type || ''
+  editForm.difficulty = mistake.difficulty || ''
+  editForm.answer = mistake.answer || ''
+  editForm.analysis = mistake.analysis || ''
+  editForm.error_reason = mistake.error_reason || ''
+  editDialogVisible.value = true
+}
+
+async function saveEdit() {
+  if (!editingId.value) return
+  try {
+    await updateMistakeApi(editingId.value, {
+      subject: editForm.subject || undefined,
+      knowledge_point: editForm.knowledge_point || undefined,
+      error_type: editForm.error_type || undefined,
+      difficulty: editForm.difficulty || undefined,
+      answer: editForm.answer || undefined,
+      analysis: editForm.analysis || undefined,
+      error_reason: editForm.error_reason || undefined
+    })
+    ElMessage.success('修改成功')
+    editDialogVisible.value = false
+    loadMistakes()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '修改失败')
   }
 }
 

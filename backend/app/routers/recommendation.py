@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..services.recommendation_service import recommendation_service
 from ..services.agent_log_service import agent_log_service
 from ..schemas.recommendation import RecommendationCreate, RecommendationComplete, RecommendationReport
-from ..routers.auth import get_current_user
+from ..routers.auth import get_current_user, get_current_user_from_query
 import matplotlib.pyplot as plt
 import io
+import asyncio
+import json
 
 router = APIRouter(prefix="/api/recommend", tags=["推荐系统"])
 
@@ -32,6 +35,59 @@ async def generate_recommendations(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/generate-stream")
+async def generate_recommendations_stream(
+    count: int = Query(5, ge=1, le=20),
+    subject: str = Query(None),
+    token: str = None,
+    current_user = Depends(get_current_user_from_query),
+    db: Session = Depends(get_db)
+):
+    user_id = current_user.id
+    
+    async def event_generator():
+        queue = asyncio.Queue()
+        done = asyncio.Event()
+        
+        def progress_callback(progress: int, message: str):
+            try:
+                queue.put_nowait({"progress": progress, "message": message, "status": "generating"})
+            except Exception:
+                pass
+        
+        async def run_generation():
+            try:
+                result = await recommendation_service.generate_recommendations(
+                    db, user_id, count, subject, progress_callback=progress_callback
+                )
+                queue.put_nowait({"progress": 100, "message": "生成完成", "status": "completed", "data": result})
+            except ValueError as e:
+                queue.put_nowait({"progress": 0, "message": str(e), "status": "failed"})
+            except Exception as e:
+                queue.put_nowait({"progress": 0, "message": f"生成失败: {str(e)}", "status": "failed"})
+            finally:
+                done.set()
+        
+        gen_task = asyncio.create_task(run_generation())
+        
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    if item.get("status") in ("completed", "failed"):
+                        break
+                except asyncio.TimeoutError:
+                    if done.is_set() and queue.empty():
+                        break
+                    continue
+        finally:
+            if not gen_task.done():
+                gen_task.cancel()
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/list", response_model=list)
@@ -63,6 +119,24 @@ def complete_recommendation(
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{id}")
+def delete_recommendation(
+    id: int,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除单条推荐（独立接口，不影响其他业务）。"""
+    try:
+        deleted = recommendation_service.delete_recommendation(db, current_user.id, id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="推荐题目不存在")
+        return {"success": True, "id": id}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
 
 
 @router.get("/report", response_model=RecommendationReport)

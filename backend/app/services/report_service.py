@@ -139,10 +139,10 @@ class ReportService:
         
         avg_daily_time = 0
         if total_days > 0:
-            total_time = db.query(func.sum(UserStudyStat.total_time)).filter(
+            total_time_seconds = db.query(func.sum(UserStudyStat.total_time)).filter(
                 UserStudyStat.user_id == user_id
             ).scalar() or 0
-            avg_daily_time = round(total_time / total_days, 0)
+            avg_daily_time = round(total_time_seconds / total_days / 60, 0)
         
         return {
             "total_study_days": total_days,

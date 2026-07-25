@@ -20,10 +20,24 @@
           <el-option label="时政" value="时政" />
           <el-option label="专业课" value="专业课" />
         </el-select>
-        <el-button type="primary" @click="handleGenerate">
+        <el-button type="primary" @click="handleGenerate" :loading="generating">
           <el-icon><Refresh /></el-icon>生成推荐题目
         </el-button>
       </div>
+    </div>
+
+    <div v-if="generating || generateProgress > 0" class="generate-progress">
+      <el-progress
+        :percentage="generateProgress"
+        :status="generateStatus"
+        :stroke-width="16"
+        :text-inside="true"
+      >
+        <template #default="{ percentage }">
+          <span class="progress-text">{{ percentage }}%</span>
+        </template>
+      </el-progress>
+      <div class="progress-message">{{ generateMessage }}</div>
     </div>
 
     <div class="stats-row">
@@ -135,17 +149,27 @@
           </div>
           <div class="rec-actions">
             <el-button
+              type="danger"
+              plain
+              size="small"
+              :loading="deletingIds.has(rec.id)"
+              @click="handleDelete(rec, false)"
+            >
+              <el-icon><Delete /></el-icon>删除
+            </el-button>
+            <el-button
               v-if="!showAnswers[rec.id]"
               type="primary"
+              size="small"
               @click="showAnswers[rec.id] = true"
             >
               查看答案
             </el-button>
             <div v-else class="result-buttons">
-              <el-button type="success" @click="handleComplete(rec.id, '正确')">
+              <el-button type="success" size="small" @click="handleComplete(rec.id, '正确')">
                 <el-icon><Check /></el-icon>正确
               </el-button>
-              <el-button type="danger" @click="handleComplete(rec.id, '错误')">
+              <el-button type="danger" size="small" @click="handleComplete(rec.id, '错误')">
                 <el-icon><Close /></el-icon>错误
               </el-button>
             </div>
@@ -163,7 +187,11 @@
         <el-table :data="completedRecommendations" border>
           <el-table-column prop="subject" label="科目" width="100" />
           <el-table-column prop="knowledge_point" label="知识点" width="120" />
-          <el-table-column prop="question_text" label="题目" show-overflow-tooltip />
+          <el-table-column label="题目" min-width="200">
+            <template #default="scope">
+              <span v-html="renderLatex(scope.row.question_text)"></span>
+            </template>
+          </el-table-column>
           <el-table-column prop="result" label="结果" width="80">
             <template #default="scope">
               <el-tag :type="scope.row.result === '正确' ? 'success' : 'danger'">
@@ -171,7 +199,20 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="source" label="来源" width="80" />
+          <el-table-column prop="source" label="来源" width="100" />
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="scope">
+              <el-button
+                type="danger"
+                plain
+                size="small"
+                :loading="deletingIds.has(scope.row.id)"
+                @click="handleDelete(scope.row, true)"
+              >
+                <el-icon><Delete /></el-icon>删除
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
       <div v-else class="empty-tip">
@@ -183,14 +224,14 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Refresh, InfoFilled, Check, Close } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh, InfoFilled, Check, Close, Delete } from '@element-plus/icons-vue'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import {
   analyzeWeakPoints, generateRecommendations, getRecommendations,
   completeRecommendation, getRecommendationReport, getAgentStatus,
-  toggleAgent, getCollaborationLogs,
+  toggleAgent, getCollaborationLogs, deleteRecommendation,
   type Recommendation, type WeakPoint, type RecommendationReport,
   type AgentInfo, type CollaborationStats
 } from '../api/recommendation'
@@ -366,6 +407,7 @@ const collaborationStats = reactive<CollaborationStats>({
 })
 const loading = ref(false)
 const selectedSubject = ref('')
+const deletingIds = reactive<Set<number>>(new Set())
 
 const pendingRecommendations = computed(() => recommendations.value.filter((r: Recommendation) => !r.completed))
 const completedRecommendations = computed(() => recommendations.value.filter((r: Recommendation) => r.completed))
@@ -438,6 +480,38 @@ async function handleComplete(id: number, result: string) {
     ElMessage.success(`已标记为${result}`)
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '操作失败')
+  }
+}
+
+async function handleDelete(rec: Recommendation, isCompleted: boolean) {
+  const label = isCompleted ? '已完成题目' : '待做推荐题目'
+  try {
+    await ElMessageBox.confirm(
+      `确定删除该${label}吗？删除后无法恢复。`,
+      '删除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      }
+    )
+  } catch {
+    return
+  }
+
+  deletingIds.add(rec.id)
+  try {
+    await deleteRecommendation(rec.id)
+    recommendations.value = recommendations.value.filter(r => r.id !== rec.id)
+    delete showAnswers[rec.id]
+    const data = await getRecommendationReport()
+    Object.assign(report, data)
+    ElMessage.success('已删除')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '删除失败')
+  } finally {
+    deletingIds.delete(rec.id)
   }
 }
 

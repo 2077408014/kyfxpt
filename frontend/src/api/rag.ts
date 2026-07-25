@@ -16,13 +16,15 @@ export interface RAGDocument {
 export interface RAGChatResult {
   answer: string
   source: string | null
+  category?: string
   relevant_chunks: Array<{
     content: string
     metadata: {
       filename: string
-      chunk_index: number
-      total_chunks: number
-      chunk_size: number
+      chunk_index?: number
+      total_chunks?: number
+      chunk_size?: number
+      subject?: string
     }
     similarity: number
   }>
@@ -83,12 +85,19 @@ export async function getKnowledgeStatus(): Promise<KnowledgeStatus> {
   return await axios.get('/rag/knowledge/status')
 }
 
-export async function ragChat(question: string, top_k: number = 3, threshold: number = 0.3, subject?: string): Promise<RAGChatResult> {
+export async function ragChat(
+  question: string,
+  top_k: number = 3,
+  threshold: number = 0.3,
+  subject?: string,
+  onlyKnowledgeBase: boolean = false
+): Promise<RAGChatResult> {
   return await axios.post('/rag/chat', {
     question,
     top_k,
     threshold,
-    subject
+    subject,
+    only_knowledge_base: onlyKnowledgeBase
   })
 }
 

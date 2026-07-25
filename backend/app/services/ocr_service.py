@@ -146,10 +146,19 @@ class OCRService:
         num_count = sum(1 for c in line if c.isdigit())
         total = len(line)
         
+        math_symbols = '→←≠≤≥±∓∪∩∈∉⊂⊃⊆⊇∪∩∀∃∄∞∅∆∇∂∑∏∫∬∭∮∯∰∇√∛∜∝∞∟∠∡∢∣∥⊥⌒∂∆∇∈∉⊂⊃⊆⊇∩∪∧∨¬⇒⇔↔↕↖↗↘↙↔↕≤≥≠≈≡⊕⊗⊙⊘⊛⊠⊡⊢⊣⊤⊥⊦⊧⊨⊩⊪⊫⊬⊭⊮⊯⊰⊱⊲⊳⊴⊵⊶⊷⊸⊹⊺⊻⊼⊽⊾⊿⋀⋁⋂⋃⋄⋅⋆⋇⋈⋉⋊⋋⋌⋍⋎⋏⋐⋑⋒⋓⋔⋕⋖⋗⋘⋙⋚⋛⋜⋝⋞⋟⋠⋡⋢⋣⋤⋥⋦⋧⋨⋩⋪⋫⋬⋭⋮⋯⋰⋱→←↔↑↓↕↖↗↘↙⇀↼⇁↽⇂⇃⇄⇅⇆⇇⇈⇉⇊⇋⇌⇍⇎⇏⇐⇑⇒⇓⇔⇕⇖⇗⇘⇙⇚⇛⇜⇝⇞⇟⇠⇡⇢⇣⇤⇥⇦⇧⇨⇩⇪⇫⇬⇭⇮⇯⇰⇱⇲⇳⇴⇵⇶⇷⇸⇹⇺⇻⇼⇽⇾⇿∀∃∄∅∈∉⊂⊃⊆⊇∩∪∧∨¬⊕⊗⊙⊘⊛⊠⊡⊢⊣⊤⊥⊦⊧⊨⊩⊪⊫⊬⊭⊮⊯⊰⊱⊲⊳⊴⊵⊶⊷⊸⊹⊺⊻⊼⊽⊾⊿⅀⅁⅂⅃⅄ⅅⅆⅇⅈⅉ⅊⅋⅌⅍ⅎ⅏↕↔↖↗↘↙↕↔≤≥≠≈≡⊕⊗⊙⊘⊛⊠⊡∑∏∫∬∭∮∯∰∇√∛∜∞∟∠∡∢∣∥⊥⌒∂∆∇'
+        math_count = sum(1 for c in line if c in math_symbols)
+        
+        has_special_chars = any(c in line for c in ['→', '∞', '∑', '∏', '∫', '√', '²', '³', '∂', '∆', '∇', '∈', '∩', '∪', '≠', '≤', '≥', '≈', '≡', '→', '←', '↔', '∀', '∃', '∅'])
+        
         if total > 0 and char_count == 0 and eng_count == 0:
+            if math_count > 0 or has_special_chars:
+                return False
             return True
         
         if total >= 5 and char_count == 0 and num_count >= total * 0.8:
+            if math_count > 0 or has_special_chars:
+                return False
             return True
         
         return False

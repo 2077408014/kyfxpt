@@ -29,9 +29,9 @@
           <el-icon><Service /></el-icon>
           <span>AI问答</span>
         </el-menu-item>
-        <el-menu-item index="/dashboard/report">
-          <el-icon><PieChart /></el-icon>
-          <span>学习报告</span>
+        <el-menu-item index="/dashboard/supervision">
+          <el-icon><VideoCamera /></el-icon>
+          <span>学习监督</span>
         </el-menu-item>
       </el-menu>
       <div class="logout">
@@ -60,6 +60,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getMe } from '../api/auth'
+import { useStudyHeartbeat } from '../composables/useStudyHeartbeat'
 import { ElMessage } from 'element-plus'
 import {
   HomeFilled,
@@ -69,7 +70,7 @@ import {
   Reading,
   Service,
   Bell,
-  PieChart
+  VideoCamera
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -77,6 +78,9 @@ const route = useRoute()
 const store = useUserStore()
 const user = ref<any>(null)
 const activeMenu = ref(route.path || '/dashboard')
+
+// 启动学习时长心跳跟踪（独立模块）
+useStudyHeartbeat()
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath

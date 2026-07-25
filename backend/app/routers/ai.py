@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..services.ai_service import ai_service
+from ..services.llm_service import llm_service
 from ..routers.auth import get_current_user
 from ..schemas.ai import AIChatRequest, AICommandRequest
 
@@ -66,8 +67,15 @@ def recommend_questions(
         question_text = data.get("question_text", "")
         subject = data.get("subject", "")
         knowledge_point = data.get("knowledge_point", "")
-        
-        prompt = f"""请根据以下题目信息，生成3-5道同类练习题。
+
+        user_config = ai_service._get_user_ai_config(db, current_user.id)
+
+        if not user_config.get("api_key"):
+            raise HTTPException(status_code=400, detail="请先在AI配置页面设置API Key")
+
+        system_prompt = f"你是一个专业的考研{subject}出题专家，擅长根据题目生成同类练习题。"
+
+        user_prompt = f"""请根据以下题目信息，生成3道同类练习题。
 
 题目信息：
 科目：{subject}
@@ -76,37 +84,51 @@ def recommend_questions(
 
 要求：
 1. 生成的题目要与原题同类型、同知识点
-2. 难度要循序渐进
+2. 难度循序渐进
 3. 每道题包含题目描述、正确答案和详细解析
 4. 数学公式必须使用LaTeX格式，行内公式用$...$包裹，独立公式用$$...$$包裹
-5. 输出格式为JSON数组，每个元素包含：
-   - question: 题目描述
-   - answer: 正确答案
-   - analysis: 解析过程
+5. 输出格式为纯JSON数组，不要任何其他文字、解释或markdown标记
+6. 每个元素包含：question（题目）、answer（答案）、analysis（解析）
+7. 所有字段内容不能为空
 
-输出示例：
-[
-  {{
-    "question": "题目内容",
-    "answer": "答案",
-    "analysis": "解析"
-  }}
-]
-"""
-        
-        result = ai_service.chat(db, current_user.id, prompt)
-        answer_text = result.get("answer", "")
-        
-        import re
-        json_match = re.search(r'\[.*\]', answer_text, re.DOTALL)
-        if json_match:
-            import json
-            try:
-                questions = json.loads(json_match.group(0))
-                return {"questions": questions}
-            except json.JSONDecodeError:
-                pass
-        
-        return {"questions": [], "raw_response": answer_text}
+只输出JSON，不要任何其他内容！"""
+
+        schema_hint = '[{"question": "题目内容", "answer": "答案内容", "analysis": "解析内容"}]'
+
+        parsed = llm_service.generate_json(
+            user_message=user_prompt,
+            ai_config=user_config,
+            system_prompt=system_prompt,
+            temperature=0.5,
+            max_tokens=1500,
+            max_retries=1,
+            schema_hint=schema_hint,
+        )
+
+        questions = []
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict):
+                    q = item.get("question", "").strip()
+                    a = item.get("answer", "").strip()
+                    if q and a:
+                        questions.append({
+                            "question": q,
+                            "answer": a,
+                            "analysis": item.get("analysis", "").strip()
+                        })
+        elif isinstance(parsed, dict):
+            q = parsed.get("question", "").strip()
+            a = parsed.get("answer", "").strip()
+            if q and a:
+                questions.append({
+                    "question": q,
+                    "answer": a,
+                    "analysis": parsed.get("analysis", "").strip()
+                })
+
+        return {"questions": questions}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"生成推荐题目失败：{str(e)}")

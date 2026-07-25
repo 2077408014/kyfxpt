@@ -104,7 +104,71 @@
           </div>
           <div v-else class="empty-state">
             <el-empty description="今日单词已学完" />
-            <el-button type="primary" @click="loadReviewWords">开始复习</el-button>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="今日复习" name="review">
+        <div class="study-section">
+          <div class="plan-bar">
+            <el-form :inline="true">
+              <el-form-item label="复习范围">
+                <el-select
+                  v-model="reviewRange"
+                  placeholder="选择复习范围"
+                  style="width: 150px"
+                  @change="loadReviewWords"
+                >
+                  <el-option label="近一日" value="day" />
+                  <el-option label="近一周" value="week" />
+                  <el-option label="近一月" value="month" />
+                  <el-option label="系统推荐" value="recommended" />
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="loadReviewWords">开始复习</el-button>
+              </el-form-item>
+            </el-form>
+            <div class="daily-stats">
+              <span class="daily-stat-item">
+                <el-tag type="info">待复习: {{ reviewWords.length }} 词</el-tag>
+              </span>
+            </div>
+          </div>
+
+          <div v-if="currentReviewWord" class="word-card">
+            <div class="word-header">
+              <span class="word-number">{{ reviewIndex + 1 }} / {{ reviewWords.length }}</span>
+              <span class="word-tag">{{ currentReviewWord.exam_requirement }}</span>
+              <span class="review-badge">复习</span>
+            </div>
+            <h2 class="word">{{ currentReviewWord.word }}</h2>
+            <p class="phonetic">{{ currentReviewWord.phonetic }}</p>
+            <div class="word-actions">
+              <el-button @click="showReviewMeaning = !showReviewMeaning">
+                {{ showReviewMeaning ? '隐藏释义' : '显示释义' }}
+              </el-button>
+              <el-button @click="speakWord(currentReviewWord.word)">
+                <el-icon><VideoPlay /></el-icon>发音
+              </el-button>
+            </div>
+            <div v-if="showReviewMeaning" class="word-detail">
+              <p class="meaning">{{ currentReviewWord.meaning }}</p>
+              <p v-if="currentReviewWord.example_sentence" class="example">
+                例句：{{ currentReviewWord.example_sentence }}
+                <el-button size="small" text @click="speakWord(currentReviewWord.example_sentence)">
+                  <el-icon><VideoPlay /></el-icon>朗读
+                </el-button>
+              </p>
+            </div>
+            <div class="study-buttons">
+              <el-button type="danger" @click="markReviewResult('错误')">不认识</el-button>
+              <el-button type="warning" @click="markReviewResult('模糊')">模糊</el-button>
+              <el-button type="success" @click="markReviewResult('认识')">认识</el-button>
+            </div>
+          </div>
+          <div v-else class="empty-state">
+            <el-empty description="暂无需要复习的单词" />
           </div>
         </div>
       </el-tab-pane>
@@ -168,41 +232,18 @@
           </div>
         </div>
       </el-tab-pane>
-
-      <el-tab-pane label="待复习" name="review">
-        <div class="review-section">
-          <el-table :data="reviewWords" border>
-            <el-table-column prop="word" label="单词" width="140" />
-            <el-table-column prop="mastery_level" label="掌握程度" width="120">
-              <template #default="scope">
-                <el-tag :type="getMasteryTagType(scope.row.mastery_level)">
-                  {{ scope.row.mastery_level }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="next_review_date" label="下次复习" width="140" />
-            <el-table-column prop="review_count" label="复习次数" width="100" />
-            <el-table-column label="操作" width="120">
-              <template #default="scope">
-                <el-button size="small" @click="speakWord(scope.row.word)">
-                  <el-icon><VideoPlay /></el-icon>
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, Upload } from '@element-plus/icons-vue'
 import {
-  getWordStats, getTodayWords, getReviewWords, getWordList,
+  getWordStats, getTodayWords, getWordList,
   studyWord, getStudyPlan, saveStudyPlan, getWordCategories, uploadWordbook,
+  getReviewWordsByRange,
   type Word, type UserWord, type TodayWordsResponse
 } from '../../api/words'
 import { useSpeech } from '@/composables/useSpeech'
@@ -223,7 +264,6 @@ const dailyCount = ref(20)
 const todayWords = ref<Word[]>([])
 const currentIndex = ref(0)
 const showMeaning = ref(false)
-const reviewWords = ref<UserWord[]>([])
 const wordList = ref<UserWord[]>([])
 const searchKeyword = ref('')
 const filterLevel = ref('')
@@ -236,6 +276,12 @@ const newCount = ref(0)
 const currentWord = ref<Word | null>(null)
 const categories = ref<string[]>([])
 const selectedCategory = ref<string>('')
+
+const reviewWords = ref<Word[]>([])
+const reviewIndex = ref(0)
+const showReviewMeaning = ref(false)
+const reviewRange = ref('today')
+const currentReviewWord = ref<Word | null>(null)
 
 const currentSourceLabel = computed(() => {
   const cat = selectedCategory.value
@@ -323,13 +369,17 @@ async function loadTodayWords() {
 
 async function loadReviewWords() {
   try {
-    reviewWords.value = await getReviewWords()
-    subTab.value = 'review'
+    const result = await getReviewWordsByRange(reviewRange.value)
+    reviewWords.value = result.words
+    reviewIndex.value = 0
+    currentReviewWord.value = reviewWords.value[0] || null
+    showReviewMeaning.value = false
   } catch {
     reviewWords.value = [
-      { id: 1, word_id: 1, word: 'abandon', mastery_level: '熟悉', next_review_date: '2026-07-11', review_count: 3, correct_count: 2, last_study_date: '2026-07-10' },
-      { id: 2, word_id: 2, word: 'ability', mastery_level: '掌握', next_review_date: '2026-07-14', review_count: 5, correct_count: 5, last_study_date: '2026-07-09' },
+      { id: 1, word: 'abandon', phonetic: '/əˈbændən/', meaning: 'v. 放弃，抛弃', example_sentence: 'He decided to abandon the project.', difficulty: 1, frequency: 95, exam_requirement: '高频词' },
+      { id: 2, word: 'ability', phonetic: '/əˈbɪləti/', meaning: 'n. 能力，才能', example_sentence: 'She has the ability to learn quickly.', difficulty: 1, frequency: 88, exam_requirement: '考纲词' },
     ]
+    currentReviewWord.value = reviewWords.value[0]
   }
 }
 
@@ -370,13 +420,37 @@ async function markResult(result: string) {
   }
 }
 
+async function markReviewResult(result: string) {
+  if (!currentReviewWord.value) return
+  try {
+    await studyWord(currentReviewWord.value.id, result)
+  } catch {
+    if (result === '认识') {
+      wordStats.mastered++
+    }
+  }
+  if (reviewIndex.value < reviewWords.value.length - 1) {
+    reviewIndex.value++
+    currentReviewWord.value = reviewWords.value[reviewIndex.value]
+    showReviewMeaning.value = false
+  } else {
+    currentReviewWord.value = null
+    ElMessage.success('复习完成！')
+  }
+}
+
 onMounted(async () => {
   await loadStats()
   await loadPlan()
   await loadCategories()
   await loadTodayWords()
   await loadWordList()
-  await loadReviewWordsForTab()
+})
+
+watch(subTab, async (newTab) => {
+  if (newTab === 'review') {
+    await loadReviewWords()
+  }
 })
 
 async function handleCategoryChange() {
@@ -400,7 +474,6 @@ async function handleWordbookSelect(event: Event) {
   try {
     const result = await uploadWordbook(file)
     ElMessage.success(result.message)
-    // 词书导入后重新加载：统计、分类、今日单词
     selectedCategory.value = ''
     await loadStats()
     await loadCategories()
@@ -414,14 +487,6 @@ async function handleWordbookSelect(event: Event) {
     if (wordbookInput.value) {
       wordbookInput.value.value = ''
     }
-  }
-}
-
-async function loadReviewWordsForTab() {
-  try {
-    reviewWords.value = await getReviewWords()
-  } catch {
-    reviewWords.value = []
   }
 }
 </script>
@@ -590,10 +655,6 @@ async function loadReviewWordsForTab() {
 .pagination {
   margin-top: 16px;
   text-align: right;
-}
-
-.review-section {
-  min-height: 300px;
 }
 
 .hidden-input {

@@ -17,6 +17,7 @@ class User(Base):
     ai_api_base_url = Column(String(255), nullable=True)
     ai_api_model = Column(String(100), nullable=True)
     ai_api_provider = Column(String(50), nullable=True)
+    active_ai_config_id = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

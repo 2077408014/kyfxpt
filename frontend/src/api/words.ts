@@ -60,6 +60,10 @@ export async function getDailyReviewWords(category?: string): Promise<{ words: W
   return await axios.get('/words/daily-review', { params: { category } })
 }
 
+export async function getReviewWordsByRange(timeRange: string = 'today'): Promise<{ words: Word[]; count: number }> {
+  return await axios.get('/words/review-words', { params: { time_range: timeRange } })
+}
+
 export async function getWordCategories(): Promise<{ categories: string[] }> {
   return await axios.get('/words/categories')
 }

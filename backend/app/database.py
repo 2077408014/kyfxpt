@@ -53,6 +53,28 @@ def migrate_database():
             conn.execute(text("ALTER TABLE users ADD COLUMN selected_word_category VARCHAR(50)"))
             conn.commit()
 
+        if "active_ai_config_id" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN active_ai_config_id INTEGER"))
+            conn.commit()
+
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_configs'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE ai_configs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name VARCHAR(50) NOT NULL,
+                    provider VARCHAR(50) NOT NULL,
+                    api_key VARCHAR(500) NOT NULL,
+                    base_url VARCHAR(255) NOT NULL,
+                    model VARCHAR(100) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX ix_ai_configs_user_id ON ai_configs (user_id)"))
+            conn.commit()
+
         result = conn.execute(text("PRAGMA table_info(words)"))
         word_columns = [row[1] for row in result]
         if "category" not in word_columns:
@@ -183,6 +205,23 @@ def migrate_database():
                     FOREIGN KEY (user_id) REFERENCES users (id)
                 )
             """))
+            conn.commit()
+
+        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='study_supervision_records'"))
+        if not result.scalar():
+            conn.execute(text("""
+                CREATE TABLE study_supervision_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    session_id VARCHAR(36) NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    confidence FLOAT NOT NULL DEFAULT 0.0,
+                    face_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """))
+            conn.execute(text("CREATE INDEX ix_study_supervision_session_id ON study_supervision_records (session_id)"))
             conn.commit()
 
         _seed_default_user(conn)

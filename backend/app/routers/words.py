@@ -88,6 +88,30 @@ async def get_daily_review_words(
     }
 
 
+@router.get("/review-words")
+async def get_review_words_by_range(
+    time_range: str = Query("today", description="复习时间范围: today(今日), day(近一日), week(近一周), month(近一月), recommended(系统推荐)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    words = word_service.get_review_words_by_range(db, current_user.id, time_range)
+    return {
+        "words": [
+            {
+                "id": word.id,
+                "word": word.word,
+                "phonetic": word.phonetic,
+                "meaning": word.meaning,
+                "example_sentence": word.example_sentence,
+                "exam_requirement": word.exam_requirement,
+                "category": word.category
+            }
+            for word in words
+        ],
+        "count": len(words)
+    }
+
+
 @router.get("/categories")
 async def get_word_categories(
     db: Session = Depends(get_db),

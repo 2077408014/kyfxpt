@@ -3,72 +3,11 @@ from datetime import datetime
 from ..models.ai_chat import AIChatHistory
 import requests
 import os
-import random
 from dotenv import load_dotenv
 from ..config import settings
+from .llm_service import llm_service
 
 load_dotenv()
-
-AI_RESPONSES = {
-    "default": [
-        "好的，我来帮您解答！",
-        "这个问题很有意思，让我为您分析一下。",
-        "考研复习是一个系统性的工程，需要合理规划。",
-        "坚持就是胜利，加油！"
-    ],
-    "考研英语": [
-        "考研英语分为英语一和英语二，英语一难度较高。",
-        "阅读理解是得分重点，建议每天练习2-3篇。",
-        "写作需要积累模板和素材，每周至少练习1篇。",
-        "词汇是基础，建议使用艾宾浩斯记忆法进行复习。",
-        "完形填空考察综合能力，建议放在最后做。",
-        "翻译题要注意中英文表达差异，确保语句通顺。"
-    ],
-    "考研政治": [
-        "政治分为马原、毛中特、史纲、思修、时政五个部分。",
-        "马原重在理解，毛中特重在记忆。",
-        "建议暑期开始系统复习，10月份开始刷题。",
-        "肖秀荣系列是考研政治的经典资料。",
-        "时政部分要关注当年的重大事件。",
-        "分析题需要掌握答题模板和关键词。"
-    ],
-    "考研数学": [
-        "数学分为数一、数二、数三，难度依次递减。",
-        "高数占比最高，是复习的重点。",
-        "建议从基础开始，打好知识点基础。",
-        "刷题是关键，建议完成至少两遍真题。",
-        "错题要反复研究，总结解题方法。",
-        "线代和概率虽然分值少，但不能忽视。",
-        "极限是高数的基础，重要极限：$$\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1$$",
-        "导数定义：$$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x) - f(x)}{\\Delta x}$$",
-        "牛顿-莱布尼茨公式：$$\\int_a^b f(x)dx = F(b) - F(a)$$，其中 $F'(x) = f(x)$",
-        "泰勒展开：$$f(x) = \\sum_{n=0}^{\\infty} \\frac{f^{(n)}(a)}{n!}(x-a)^n$$",
-        "多元函数偏导数：$$\\frac{\\partial f}{\\partial x} = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x, y) - f(x, y)}{\\Delta x}$$",
-        "高斯公式（散度定理）：$$\\iiint_V \\text{div}\\vec{F} dV = \\iint_{\\partial V} \\vec{F} \\cdot d\\vec{S}$$"
-    ],
-    "专业课": [
-        "专业课要以目标院校的参考书为主。",
-        "历年真题是最重要的复习资料。",
-        "建议联系学长学姐获取复习经验。",
-        "笔记整理很重要，便于后期复习。",
-        "关注目标院校的招生政策和考试大纲变化。"
-    ],
-    "复习规划": [
-        "建议制定详细的复习计划，按月、周、日安排。",
-        "暑期是黄金复习期，要充分利用。",
-        "9-10月份是强化阶段，重点刷题。",
-        "11-12月份是冲刺阶段，模拟考试很重要。",
-        "注意劳逸结合，保持良好的心态。",
-        "定期总结复习进度，及时调整计划。"
-    ],
-    "心态调整": [
-        "考研是一场持久战，保持积极心态很重要。",
-        "遇到困难时可以适当放松，不要给自己太大压力。",
-        "找研友一起学习，互相鼓励。",
-        "相信自己的努力一定会有回报。",
-        "适当的运动有助于缓解压力。"
-    ]
-}
 
 
 SYSTEM_PROMPT = """你是一个专业的考研复习助手，精通考研英语、政治、数学、专业课等各科目知识。
@@ -112,19 +51,29 @@ class AIService:
         self.timeout = int(os.getenv("AI_TIMEOUT", "60"))
         self.local_llm_available = False
     
-    def chat_with_rag(self, db: Session, user_id: int, message: str, top_k: int = 3, threshold: float = 0.3, subject: str = None) -> dict:
+    def chat_with_rag(self, db: Session, user_id: int, message: str, top_k: int = 3, threshold: float = 0.3, subject: str = None, only_knowledge_base: bool = False) -> dict:
         from .rag_service import rag_service
-
-        self._save_message(db, user_id, "question", message)
 
         try:
             user_config = self._get_user_ai_config(db, user_id)
-            rag_result = rag_service.chat(user_id, message, top_k, threshold, user_config, subject=subject)
-            
+            rag_result = rag_service.chat(user_id, message, top_k, threshold, user_config, subject=subject, only_knowledge_base=only_knowledge_base)
+
             source = rag_result.get("source") or (rag_result.get("from_knowledge_base") and "知识库") or "AI"
-            
+
+            if only_knowledge_base and not rag_result.get("from_knowledge_base"):
+                return {
+                    "answer": rag_result.get("answer", "未从您的资料中找到相关内容。"),
+                    "category": "知识库",
+                    "suggestions": [],
+                    "from_knowledge_base": False,
+                    "relevant_chunks": rag_result.get("relevant_chunks", []),
+                    "source": None
+                }
+
+            # RAG 成功，question 和 answer 各保存一次
+            self._save_message(db, user_id, "question", message)
             self._save_message(db, user_id, "answer", rag_result["answer"], source)
-            
+
             return {
                 "answer": rag_result["answer"],
                 "category": source,
@@ -135,80 +84,83 @@ class AIService:
             }
         except Exception as e:
             print(f"RAG chat failed: {e}")
-            return self.chat(db, user_id, message)
-    
+            import traceback
+            traceback.print_exc()
+            if only_knowledge_base:
+                return {
+                    "answer": f"检索失败：{str(e)}",
+                    "category": "知识库",
+                    "suggestions": [],
+                    "from_knowledge_base": False,
+                    "relevant_chunks": [],
+                    "source": None
+                }
+            return self.chat(db, user_id, message, skip_save_question=True)
+
     def _get_user_ai_config(self, db: Session, user_id: int) -> dict:
         from ..models.user import User
+        from ..models.ai_config import AIConfig
+
         user = db.query(User).filter(User.id == user_id).first()
+
+        # 优先使用 ai_configs 表中激活的配置
+        if user and user.active_ai_config_id:
+            config = db.query(AIConfig).filter(
+                AIConfig.id == user.active_ai_config_id,
+                AIConfig.user_id == user_id
+            ).first()
+            if config:
+                return {
+                    "api_key": config.api_key,
+                    "base_url": config.base_url or self.default_base_url,
+                    "model": config.model or self.default_model
+                }
+
+        # 回退到 users 表中的旧配置字段（兼容已有数据）
         if user and user.ai_api_key:
             return {
                 "api_key": user.ai_api_key,
                 "base_url": user.ai_api_base_url or self.default_base_url,
                 "model": user.ai_api_model or self.default_model
             }
+
         return {
             "api_key": self.default_api_key,
             "base_url": self.default_base_url,
             "model": self.default_model
         }
 
-    def chat(self, db: Session, user_id: int, message: str) -> dict:
-        self._save_message(db, user_id, "question", message)
-        
-        category = self._classify_message(message)
-        
-        message_lower = message.lower()
-        command_actions = {
-            "错题": ("正在打开错题管理模块...", "command"),
-            "单词": ("正在启动单词背诵模式...", "command"),
-            "推荐": ("正在为您推荐相关题目...", "command"),
-            "薄弱": ("正在分析您的薄弱知识点...", "command"),
-            "计划": ("正在为您生成个性化复习计划...", "command"),
-            "报告": ("正在生成学习报告...", "command"),
-        }
+    def chat(self, db: Session, user_id: int, message: str, skip_save_question: bool = False) -> dict:
+        if not skip_save_question:
+            self._save_message(db, user_id, "question", message)
         
         answer = ""
-        source = category
+        source = "default"
         
-        for keyword, (response, src) in command_actions.items():
-            if keyword in message_lower:
-                answer = response
-                source = src
-                break
+        user_config = self._get_user_ai_config(db, user_id)
         
-        if not answer:
-            user_config = self._get_user_ai_config(db, user_id)
-            
-            if user_config["api_key"]:
-                try:
-                    answer = self._call_ai_model(db, user_id, message, user_config)
-                    source = "AI"
-                except Exception as e:
-                    print(f"AI API call failed: {e}")
-                    responses = AI_RESPONSES.get(category, AI_RESPONSES["default"])
-                    answer = responses[random.randint(0, len(responses) - 1)]
-            elif settings.USE_LOCAL_LLM:
-                try:
-                    answer = self._call_local_llm(message)
-                    source = "Local LLM"
-                except Exception as e:
-                    print(f"Local LLM call failed: {e}")
-                    responses = AI_RESPONSES.get(category, AI_RESPONSES["default"])
-                    answer = responses[random.randint(0, len(responses) - 1)]
-            else:
-                responses = AI_RESPONSES.get(category, AI_RESPONSES["default"])
-                answer = responses[random.randint(0, len(responses) - 1)]
-            
-            if category == "考研数学" and "$$" not in answer:
-                math_responses = [r for r in AI_RESPONSES["考研数学"] if "$$" in r]
-                if math_responses:
-                    answer = math_responses[random.randint(0, len(math_responses) - 1)]
+        if user_config["api_key"]:
+            try:
+                answer = self._call_ai_model(db, user_id, message, user_config)
+                source = "AI"
+            except Exception as e:
+                print(f"AI API call failed: {e}")
+                answer = f"抱歉，AI 服务调用失败（{e}），暂时无法回答您的问题。请检查 AI 配置是否正确。"
+        elif settings.USE_LOCAL_LLM:
+            try:
+                answer = self._call_local_llm(message)
+                source = "Local LLM"
+            except Exception as e:
+                print(f"Local LLM call failed: {e}")
+                answer = f"抱歉，本地 LLM 调用失败（{e}），暂时无法回答您的问题。"
+        else:
+            answer = "抱歉，尚未配置 AI 服务，无法回答您的问题。请在「AI 配置」页面设置 API。"
         
         self._save_message(db, user_id, "answer", answer, source)
         
         return {
             "answer": answer,
-            "category": category,
+            "category": source,
             "suggestions": []
         }
     
@@ -294,35 +246,21 @@ class AIService:
         
         history = self._get_conversation_history(db, user_id)
         
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
-        
+        history_messages = []
         for msg in history:
             role = "user" if msg["message_type"] == "question" else "assistant"
-            messages.append({"role": role, "content": msg["content"]})
+            history_messages.append({"role": role, "content": msg["content"]})
         
-        messages.append({"role": "user", "content": message})
+        print(f"[AI调用] 模型: {config['model']}")
+        print(f"[AI调用] 消息数量: {len(history_messages) + 1}")
         
-        payload = {
-            "model": config["model"],
-            "messages": messages,
-            "max_tokens": self.max_tokens,
-            "temperature": 0.7
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {config['api_key']}",
-            "Content-Type": "application/json"
-        }
-        
-        url = f"{config['base_url']}/chat/completions"
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        return llm_service.chat_with_history(
+            user_message=message,
+            history=history_messages,
+            ai_config=config,
+            system_prompt=SYSTEM_PROMPT,
+            temperature=0.7,
+        )
     
     def _get_conversation_history(self, db: Session, user_id: int, limit: int = 10) -> list:
         messages = db.query(AIChatHistory).filter(
@@ -330,24 +268,6 @@ class AIService:
         ).order_by(AIChatHistory.created_at.desc()).limit(limit).all()
         
         return [self._to_dict(msg) for msg in reversed(messages)]
-    
-    def _classify_message(self, message: str) -> str:
-        message_lower = message.lower()
-        
-        if any(keyword in message_lower for keyword in ["英语", "阅读", "写作", "翻译", "完形", "词汇"]):
-            return "考研英语"
-        if any(keyword in message_lower for keyword in ["政治", "马原", "毛中特", "史纲", "思修", "时政"]):
-            return "考研政治"
-        if any(keyword in message_lower for keyword in ["数学", "高数", "线代", "概率", "微积分", "极限", "导数", "积分", "泰勒", "偏导", "微分", "方程"]):
-            return "考研数学"
-        if any(keyword in message_lower for keyword in ["专业", "专业课"]):
-            return "专业课"
-        if any(keyword in message_lower for keyword in ["计划", "安排", "规划", "时间"]):
-            return "复习规划"
-        if any(keyword in message_lower for keyword in ["心态", "压力", "焦虑", "放松"]):
-            return "心态调整"
-        
-        return "default"
     
     def _save_message(self, db: Session, user_id: int, message_type: str, content: str, source: str = None):
         message = AIChatHistory(

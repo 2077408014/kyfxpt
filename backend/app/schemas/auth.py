@@ -19,6 +19,7 @@ class UserResponse(BaseModel):
     ai_api_provider: Optional[str]
     ai_api_model: Optional[str]
     ai_api_base_url: Optional[str]
+    active_ai_config_id: Optional[int]
     created_at: datetime
 
     class Config:

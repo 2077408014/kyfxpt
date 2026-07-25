@@ -76,7 +76,26 @@
         <el-option label="全部学科" value="" />
         <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
       </el-select>
-      <el-button type="primary" @click="handleKnowledgeSearch">搜索知识点</el-button>
+      <el-button type="primary" @click="handleKnowledgeSearch" :loading="knowledgeSearchLoading">
+        <el-icon v-if="!knowledgeSearchLoading"><Search /></el-icon>
+        {{ knowledgeSearchLoading ? '搜索中...' : '搜索知识点' }}
+      </el-button>
+    </div>
+
+    <div v-if="knowledgeSearchLoading" class="search-progress-container">
+      <div class="search-progress">
+        <el-progress
+          :percentage="knowledgeSearchProgress"
+          :status="knowledgeSearchProgress >= 100 ? 'success' : undefined"
+          :stroke-width="12"
+          :text-inside="true"
+        >
+          <template #default="{ percentage }">
+            <span class="progress-text">{{ percentage }}%</span>
+          </template>
+        </el-progress>
+        <div class="progress-message">{{ knowledgeSearchProgressMessage }}</div>
+      </div>
     </div>
 
     <div v-if="showKnowledgeSearchResult" class="knowledge-search-results">
@@ -86,37 +105,58 @@
         <div class="ai-answer-header">
           <span class="ai-icon">🤖</span>
           <span class="ai-label">AI回答</span>
+          <el-tag v-if="knowledgeSearchSource" type="info" size="small" class="source-tag">来源: {{ knowledgeSearchSource }}</el-tag>
         </div>
         <div v-if="knowledgeSearchLoading" class="ai-loading">
           <el-spinner />
           <span>AI正在思考中...</span>
         </div>
-        <div v-else class="ai-answer-content">
-          {{ knowledgeSearchAnswer }}
-        </div>
+        <div v-else class="ai-answer-content" v-html="renderMarkdown(knowledgeSearchAnswer)"></div>
       </el-card>
 
       <div v-if="knowledgeSearchSources.length > 0" class="knowledge-sources-section">
-        <h4>相关资料来源</h4>
+        <div class="sources-header">
+          <h4>📚 检索到的原始资料片段 ({{ knowledgeSearchSources.length }}条)</h4>
+          <el-button size="small" @click="showAllSources = !showAllSources">
+            {{ showAllSources ? '收起全部' : '展开全部' }}
+          </el-button>
+        </div>
         <div class="knowledge-results-list">
           <el-card
-            v-for="(item, index) in knowledgeSearchSources"
+            v-for="(item, index) in displayedSources"
             :key="index"
             class="knowledge-result-card"
           >
-            <div class="knowledge-score" :style="{ background: `linear-gradient(90deg, #67c23a ${(item.similarity * 100)}%, #eee ${(item.similarity * 100)}%)` }">
-              {{ (item.similarity * 100).toFixed(1) }}%
+            <div class="result-header">
+              <div class="knowledge-score" :style="{ background: getScoreGradient(item.similarity) }">
+                相似度 {{ (item.similarity * 100).toFixed(1) }}%
+              </div>
+              <div class="result-meta">
+                <el-tag size="small">{{ item.subject || '未分类' }}</el-tag>
+                <span class="chunk-info">分块 {{ item.chunkIndex || (index + 1) }}/{{ item.totalChunks || '-' }}</span>
+              </div>
             </div>
             <div class="knowledge-content">
-              <div class="knowledge-filename">{{ item.filename }}</div>
-              <div class="knowledge-text">{{ item.content }}</div>
+              <div class="knowledge-filename">📄 {{ item.filename }}</div>
+              <div class="knowledge-text" :class="{ collapsed: !isSourceExpanded(index) }">
+                {{ item.content }}
+              </div>
+              <el-button 
+                v-if="item.content && item.content.length > 100" 
+                type="primary" 
+                link 
+                size="small"
+                @click="toggleSourceExpand(index)"
+              >
+                {{ isSourceExpanded(index) ? '收起' : '查看完整内容' }}
+              </el-button>
             </div>
           </el-card>
         </div>
       </div>
 
-      <div v-if="!knowledgeSearchLoading && knowledgeSearchSources.length === 0" class="empty-tip">
-        <el-icon><Search /></el-icon>未找到相关知识点，请尝试其他关键词或上传更多资料
+      <div v-if="!knowledgeSearchLoading && knowledgeSearchSources.length === 0 && !knowledgeSearchAnswer" class="empty-tip">
+        <el-icon><Search /></el-icon>未从您的资料中找到相关内容，请尝试其他关键词或上传更多资料
       </div>
 
       <el-button @click="closeKnowledgeSearch">返回文件列表</el-button>
@@ -206,11 +246,11 @@
       <template #footer>
         <el-button @click="showDetail = false">关闭</el-button>
         <el-button 
-          v-if="selectedResource && !selectedResource.indexed_at && !indexing" 
+          v-if="selectedResource && !indexing" 
           type="primary" 
           @click="handleIndex"
         >
-          开始索引
+          {{ selectedResource.indexed_at ? '重新索引' : '开始索引' }}
         </el-button>
       </template>
     </el-dialog>
@@ -253,9 +293,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, View, InfoFilled, Delete, FolderOpened, DataLine, Connection } from '@element-plus/icons-vue'
+import { marked } from 'marked'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
+
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
 import {
   uploadDocument, getDocuments, deleteDocument, getKnowledgeStatus, indexDocument, cancelIndexDocument, ragChat, getDocumentDownloadUrl,
   type RAGDocument, type KnowledgeStatus, type RAGChatResult
@@ -275,12 +323,49 @@ const selectedResource = ref<RAGDocument | null>(null)
 const knowledgeStatus = ref<KnowledgeStatus | null>(null)
 const showKnowledgeSearchResult = ref(false)
 const knowledgeSearchLoading = ref(false)
+const knowledgeSearchProgress = ref(0)
+const knowledgeSearchProgressMessage = ref('')
 const knowledgeSearchAnswer = ref('')
+const knowledgeSearchSource = ref<string | null>(null)
 const knowledgeSearchSources = ref<Array<{
   content: string
   filename: string
   similarity: number
+  subject?: string
+  chunkIndex?: number
+  totalChunks?: number
 }>>([])
+const showAllSources = ref(false)
+const expandedSourceIndexes = ref<Set<number>>(new Set())
+
+const displayedSources = computed(() => {
+  if (showAllSources.value) {
+    return knowledgeSearchSources.value
+  }
+  return knowledgeSearchSources.value.slice(0, 3)
+})
+
+function isSourceExpanded(index: number): boolean {
+  return expandedSourceIndexes.value.has(index)
+}
+
+function toggleSourceExpand(index: number): void {
+  if (expandedSourceIndexes.value.has(index)) {
+    expandedSourceIndexes.value.delete(index)
+  } else {
+    expandedSourceIndexes.value.add(index)
+  }
+}
+
+function getScoreGradient(similarity: number): string {
+  const percent = Math.min(100, Math.max(0, similarity * 100))
+  if (similarity >= 0.7) {
+    return `linear-gradient(90deg, #67c23a ${percent}%, #eee ${percent}%)`
+  } else if (similarity >= 0.5) {
+    return `linear-gradient(90deg, #e6a23c ${percent}%, #eee ${percent}%)`
+  }
+  return `linear-gradient(90deg, #f56c6c ${percent}%, #eee ${percent}%)`
+}
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const showUploadDialog = ref(false)
@@ -412,6 +497,131 @@ async function handleSearch() {
   }
 }
 
+function renderMathFormula(formula: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(formula.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: false,
+      trust: true
+    })
+  } catch {
+    return `<span class="math-error">${displayMode ? '$$' : '$'}${formula.trim()}${displayMode ? '$$' : '$'}</span>`
+  }
+}
+
+function normalizeLatex(formula: string): string {
+  let result = formula
+  
+  result = result.replace(/\\lim_\{([^}]+)\}/g, '\\lim_{$1}')
+  result = result.replace(/\\lim\s*\{([^}]+)\}/g, '\\lim_{$1}')
+  result = result.replace(/lim_\(([^)]+)\)/g, '\\lim_{$1}')
+  result = result.replace(/lim\s*([a-zA-Z]+)\s*[-→]\s*([0-9a-zA-Z]+)/g, '\\lim_{$1 \\to $2}')
+  result = result.replace(/\\lim\s*([a-zA-Z]+)\s*\\to\s*([0-9a-zA-Z]+)/g, '\\lim_{$1 \\to $2}')
+  
+  result = result.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '\\frac{$1}{$2}')
+  
+  const mathCommands = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'ln', 'log', 'sqrt', 'int', 'sum', 'to', 'cdot', 'infty', 'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'theta', 'lambda', 'mu', 'pi', 'rho', 'sigma', 'phi', 'psi', 'omega', 'exp', 'lim', 'frac']
+  for (const cmd of mathCommands) {
+    const regex = new RegExp(`\\\\${cmd}`, 'g')
+    result = result.replace(regex, `\\${cmd}`)
+  }
+  
+  result = result.replace(/\^\{([^}]+)\}/g, '^{$1}')
+  result = result.replace(/\^([a-zA-Z0-9]+)/g, '^{$1}')
+  result = result.replace(/\^\{([^}]+)\^\{([^}]+)\}\}/g, '^{$1^{$2}}')
+  result = result.replace(/_\{([^}]+)\}/g, '_{$1}')
+  result = result.replace(/_([a-zA-Z0-9]+)/g, '_{$1}')
+  
+  result = result.replace(/\*/g, ' \\cdot ')
+  
+  result = result.replace(/\\\\inf\s*ty/g, '\\infty')
+  result = result.replace(/\\inf\s*ty/g, '\\infty')
+  result = result.replace(/inf\s*ty\b/g, '\\infty')
+  result = result.replace(/infinity/g, '\\infty')
+  result = result.replace(/inf\b/g, '\\infty')
+  
+  result = result.replace(/\\square/g, 'x')
+  
+  result = result.replace(/-→/g, '\\to')
+  result = result.replace(/→/g, '\\to')
+  result = result.replace(/->/g, '\\to')
+  
+  result = result.replace(/\\times/g, ' \\cdot ')
+  result = result.replace(/\\ast/g, ' \\cdot ')
+  
+  result = result.replace(/\\quad/g, ' ')
+  result = result.replace(/\\qquad/g, '  ')
+  
+  result = result.replace(/\s+/g, ' ')
+  
+  return result.trim()
+}
+
+function renderMarkdown(text: string): string {
+  if (!text) return ''
+  
+  let result = text
+  
+  const mathBlocks: { placeholder: string; html: string }[] = []
+  
+  const addMathBlock = (formula: string, displayMode: boolean): string => {
+    const normalized = normalizeLatex(formula)
+    try {
+      const html = renderMathFormula(normalized, displayMode)
+      const placeholder = `XMK${mathBlocks.length}MKX`
+      mathBlocks.push({ placeholder, html })
+      return placeholder
+    } catch {
+      return displayMode ? `$$${formula}$$` : `$${formula}$`
+    }
+  }
+  
+  result = result.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
+    const trimmed = formula.trim()
+    if (!trimmed) return '$$'
+    return addMathBlock(trimmed, true)
+  })
+  
+  result = result.replace(/\$([^\$\n]+?)\$/g, (_, formula) => {
+    const trimmed = formula.trim()
+    if (!trimmed) return '$'
+    if (trimmed.length > 80) {
+      return addMathBlock(trimmed, true)
+    }
+    return addMathBlock(trimmed, false)
+  })
+  
+  result = result.replace(/\\\(([^)]+?)\\\)/g, (_, formula) => {
+    const trimmed = formula.trim()
+    if (!trimmed) return ''
+    return addMathBlock(trimmed, false)
+  })
+  
+  result = result.replace(/\\\[([^\]]+?)\\\]/g, (_, formula) => {
+    const trimmed = formula.trim()
+    if (!trimmed) return ''
+    return addMathBlock(trimmed, true)
+  })
+
+  const simpleMathPattern = /(\\(?:frac|sqrt|sum|int|lim|sin|cos|tan|cot|sec|csc|ln|log|exp|infty|to|cdot|alpha|beta|gamma|delta|epsilon|theta|pi|sigma|phi|psi|omega|lambda|mu|nu|xi|rho|tau|upsilon|partial|nabla|pm|mp|leq|geq|neq|approx|equiv|text)\b[^)]*?)/g
+  result = result.replace(simpleMathPattern, (match) => {
+    if (match.includes('XMK')) return match
+    return addMathBlock(match, false)
+  })
+  
+  const parsedMarkdown = marked.parse(result)
+  if (parsedMarkdown) {
+    result = parsedMarkdown as string
+  }
+  
+  mathBlocks.forEach(({ placeholder, html }) => {
+    result = result.split(placeholder).join(html)
+  })
+  
+  return result
+}
+
 async function handleKnowledgeSearch() {
   if (!knowledgeSearchQuery.value.trim()) {
     ElMessage.warning('请输入搜索词')
@@ -419,18 +629,48 @@ async function handleKnowledgeSearch() {
   }
 
   knowledgeSearchLoading.value = true
+  knowledgeSearchProgress.value = 0
+  knowledgeSearchProgressMessage.value = '正在准备搜索...'
+  showKnowledgeSearchResult.value = false
+  knowledgeSearchSource.value = null
+  showAllSources.value = false
+  expandedSourceIndexes.value.clear()
+  
+  const progressSteps = [
+    { progress: 10, message: '正在向量化查询...' },
+    { progress: 30, message: '正在检索知识库...' },
+    { progress: 50, message: '正在匹配相关内容...' },
+    { progress: 70, message: '正在生成回答...' },
+    { progress: 90, message: '正在整理结果...' },
+  ]
+  
   try {
+    for (const step of progressSteps) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      knowledgeSearchProgress.value = step.progress
+      knowledgeSearchProgressMessage.value = step.message
+    }
+    
     const result: RAGChatResult = await ragChat(
       knowledgeSearchQuery.value.trim(),
       5,
-      0.2,
-      knowledgeSearchSubject.value || undefined
+      0.5,
+      knowledgeSearchSubject.value || undefined,
+      true
     )
+    
+    knowledgeSearchProgress.value = 100
+    knowledgeSearchProgressMessage.value = '搜索完成'
+    
     knowledgeSearchAnswer.value = result.answer || '暂无回答'
-    knowledgeSearchSources.value = (result.relevant_chunks || []).map(item => ({
+    knowledgeSearchSource.value = result.source || null
+    knowledgeSearchSources.value = (result.relevant_chunks || []).map((item, idx) => ({
       content: item.content || '',
       filename: item.metadata?.filename || '未知文件',
-      similarity: item.similarity || 0
+      similarity: item.similarity || 0,
+      subject: item.metadata?.subject || undefined,
+      chunkIndex: item.metadata?.chunk_index || (idx + 1),
+      totalChunks: item.metadata?.total_chunks || undefined
     }))
     showKnowledgeSearchResult.value = true
     resources.value = []
@@ -438,13 +678,20 @@ async function handleKnowledgeSearch() {
     ElMessage.error(error.response?.data?.detail || '搜索失败')
   } finally {
     knowledgeSearchLoading.value = false
+    setTimeout(() => {
+      knowledgeSearchProgress.value = 0
+      knowledgeSearchProgressMessage.value = ''
+    }, 500)
   }
 }
 
 function closeKnowledgeSearch() {
   showKnowledgeSearchResult.value = false
   knowledgeSearchAnswer.value = ''
+  knowledgeSearchSource.value = null
   knowledgeSearchSources.value = []
+  showAllSources.value = false
+  expandedSourceIndexes.value.clear()
   loadResources()
 }
 
@@ -879,15 +1126,156 @@ onMounted(() => {
   font-size: 15px;
   line-height: 1.8;
   color: #333;
-  white-space: pre-wrap;
+}
+
+.ai-answer-content h1,
+.ai-answer-content h2,
+.ai-answer-content h3,
+.ai-answer-content h4,
+.ai-answer-content h5,
+.ai-answer-content h6 {
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.ai-answer-content h1 { font-size: 24px; }
+.ai-answer-content h2 { font-size: 20px; }
+.ai-answer-content h3 { font-size: 18px; }
+.ai-answer-content h4 { font-size: 16px; }
+
+.ai-answer-content p {
+  margin-bottom: 12px;
+}
+
+.ai-answer-content ul,
+.ai-answer-content ol {
+  margin-bottom: 12px;
+  padding-left: 24px;
+}
+
+.ai-answer-content li {
+  margin-bottom: 6px;
+}
+
+.ai-answer-content strong {
+  font-weight: 600;
+  color: #333;
+}
+
+.ai-answer-content em {
+  font-style: italic;
+}
+
+.ai-answer-content blockquote {
+  border-left: 4px solid #667eea;
+  padding-left: 16px;
+  margin: 16px 0;
+  color: #666;
+  background: #f5f7fa;
+  padding: 12px 16px;
+  border-radius: 0 8px 8px 0;
+}
+
+.ai-answer-content code {
+  background: #f5f7fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 14px;
+}
+
+.ai-answer-content pre {
+  background: #f5f7fa;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 12px;
+}
+
+.ai-answer-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.ai-answer-content a {
+  color: #667eea;
+  text-decoration: none;
+}
+
+.ai-answer-content a:hover {
+  text-decoration: underline;
+}
+
+.ai-answer-content hr {
+  border: none;
+  border-top: 1px solid #eee;
+  margin: 20px 0;
+}
+
+.ai-answer-content .latex-formula {
+  font-family: 'KaTeX_Main', 'Times New Roman', serif;
+}
+
+.ai-answer-content .latex-formula.block {
+  display: block;
+  text-align: center;
+  margin: 16px 0;
+  font-size: 18px;
+}
+
+.ai-answer-content .katex {
+  font-size: 1.1em;
+}
+
+.ai-answer-content .katex-display {
+  display: block;
+  margin: 16px 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.ai-answer-content .katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+
+.ai-answer-content .katex-display::-webkit-scrollbar-track {
+  background: #f0f0f0;
+}
+
+.ai-answer-content .katex-display::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+.ai-answer-content .katex-display::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
+
+.ai-answer-content .math-error {
+  color: #e74c3c;
+  font-family: monospace;
+  background: #fff5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
 .knowledge-sources-section {
   margin-top: 20px;
 }
 
-.knowledge-sources-section h4 {
+.sources-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 12px;
+}
+
+.sources-header h4 {
+  margin: 0;
   font-size: 14px;
   color: #666;
 }
@@ -900,17 +1288,39 @@ onMounted(() => {
 
 .knowledge-result-card {
   display: flex;
-  gap: 16px;
+  flex-direction: column;
+  gap: 12px;
   padding: 16px;
 }
 
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chunk-info {
+  font-size: 12px;
+  color: #999;
+}
+
+.source-tag {
+  margin-left: 8px;
+}
+
 .knowledge-score {
-  width: 80px;
-  height: 40px;
+  width: 120px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #333;
   border-radius: 6px;
@@ -932,7 +1342,42 @@ onMounted(() => {
   font-size: 14px;
   color: #666;
   line-height: 1.6;
-  max-height: 120px;
-  overflow-y: auto;
+  max-height: 80px;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.knowledge-text.collapsed {
+  max-height: 80px;
+}
+
+.knowledge-text:not(.collapsed) {
+  max-height: none;
+}
+
+.search-progress-container {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  border: 1px solid #b3d9ff;
+}
+
+.search-progress {
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.search-progress .progress-text {
+  font-size: 13px;
+  color: #fff;
+}
+
+.progress-message {
+  text-align: center;
+  margin-top: 10px;
+  font-size: 14px;
+  color: #409eff;
+  font-weight: 500;
 }
 </style>

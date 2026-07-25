@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import engine, Base, migrate_database
 from .models import User, Mistake, Word, Resource, Recommendation, AIChatHistory, UserStudyStat, PoliticsRecitation, KnowledgeDocument
-from .routers import auth, mistakes, words, politics, recommendation, resources, ai, report, rag
+from .routers import auth, mistakes, words, politics, recommendation, resources, ai, report, rag, supervision, study_tracker, ai_config
 from .config import UPLOAD_PATH
 
 Base.metadata.create_all(bind=engine)
@@ -30,6 +30,9 @@ app.include_router(resources.router)
 app.include_router(ai.router)
 app.include_router(rag.router)
 app.include_router(report.router)
+app.include_router(supervision.router)
+app.include_router(study_tracker.router)
+app.include_router(ai_config.router)
 
 @app.get("/")
 async def root():

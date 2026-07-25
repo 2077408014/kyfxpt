@@ -54,6 +54,22 @@ instance.interceptors.request.use((config) => {
 
 instance.interceptors.response.use(
   (response) => {
+    // 自动跟踪学习事件（独立模块：无需修改业务文件）
+    try {
+      const url: string = response.config?.url || ''
+      const method: string = (response.config?.method || 'get').toLowerCase()
+      if (method === 'post' && response.status >= 200 && response.status < 300) {
+        if (url.includes('/mistakes') && !url.includes('/review') && !url.includes('/recognize')) {
+          trackStudyEventAuto('mistake_added')
+        } else if (url.endsWith('/words/study') || url === '/words/study') {
+          trackStudyEventAuto('word_learned')
+        } else if (/\/recommend\/\d+\/complete/.test(url)) {
+          trackStudyEventAuto('question_completed')
+        }
+      }
+    } catch {
+      // ignore
+    }
     return response.data
   },
   async (error) => {

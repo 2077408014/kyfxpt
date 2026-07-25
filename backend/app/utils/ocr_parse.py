@@ -11,11 +11,11 @@ class OCRParser:
     def __init__(self):
         self.ocr_engine = RapidOCR()
 
-    def parse_file(self, file_path: str) -> str:
+    def parse_file(self, file_path: str, progress_callback=None) -> str:
         file_ext = os.path.splitext(file_path)[1].lower()
         
         if file_ext == '.pdf':
-            return self._parse_pdf(file_path)
+            return self._parse_pdf(file_path, progress_callback)
         elif file_ext in ['.png', '.jpg', '.jpeg']:
             return self._parse_image(file_path)
         elif file_ext in ['.doc', '.docx']:
@@ -25,37 +25,91 @@ class OCRParser:
         else:
             raise ValueError(f"不支持的文件类型: {file_ext}")
 
-    def _parse_pdf(self, file_path: str) -> str:
+    def _parse_pdf(self, file_path: str, progress_callback=None) -> str:
         try:
+            text = self._parse_pdf_with_fitz(file_path, progress_callback)
+            
+            if text and len(text.strip()) > 100:
+                chinese_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+                if chinese_count > len(text) * 0.1:
+                    return self._clean_text(text)
+            
+            pymupdf_text = text
+            
             reader = PdfReader(file_path)
-            text = ""
+            total_pages = len(reader.pages)
+            pypdf_text = ""
             has_text = False
             
-            for page in reader.pages:
+            for i, page in enumerate(reader.pages):
                 page_text = page.extract_text()
                 if page_text and page_text.strip():
                     has_text = True
-                    text += page_text + "\n\n"
+                    pypdf_text += page_text + "\n\n"
+                
+                if progress_callback and total_pages > 0:
+                    page_progress = int(5 + (i + 1) / total_pages * 15)
+                    if page_progress % 5 == 0 or i == total_pages - 1:
+                        progress_callback(page_progress, f"正在解析第 {i + 1}/{total_pages} 页...")
             
-            if has_text and len(text.strip()) > 100:
-                return self._clean_text(text)
+            if has_text and len(pypdf_text.strip()) > 100:
+                pypdf_chinese = sum(1 for c in pypdf_text if '\u4e00' <= c <= '\u9fff')
+                if pymupdf_text and pypdf_chinese < chinese_count * 0.5:
+                    return self._clean_text(pymupdf_text)
+                return self._clean_text(pypdf_text)
             
-            return self._parse_scanned_pdf(file_path)
+            if pymupdf_text and len(pymupdf_text.strip()) > 100:
+                return self._clean_text(pymupdf_text)
+            
+            if progress_callback:
+                progress_callback(10, "检测为扫描版PDF，开始OCR识别...")
+            
+            return self._parse_scanned_pdf(file_path, progress_callback)
         except Exception:
-            return self._parse_scanned_pdf(file_path)
+            if progress_callback:
+                progress_callback(5, "PDF解析失败，尝试OCR识别...")
+            return self._parse_scanned_pdf(file_path, progress_callback)
 
-    def _parse_scanned_pdf(self, file_path: str) -> str:
+    def _parse_pdf_with_fitz(self, file_path: str, progress_callback=None) -> str:
+        try:
+            doc = fitz.open(file_path)
+            total_pages = len(doc)
+            text = ""
+            
+            for page_num, page in enumerate(doc):
+                page_text = page.get_text()
+                if page_text and page_text.strip():
+                    text += page_text + "\n\n"
+                
+                if progress_callback and total_pages > 0:
+                    page_progress = int(5 + (page_num + 1) / total_pages * 15)
+                    if page_progress % 5 == 0 or page_num == total_pages - 1:
+                        progress_callback(page_progress, f"正在解析第 {page_num + 1}/{total_pages} 页...")
+            
+            doc.close()
+            return text
+        except Exception:
+            return ""
+
+    def _parse_scanned_pdf(self, file_path: str, progress_callback=None) -> str:
         text = ""
         try:
             doc = fitz.open(file_path)
-            for page in doc:
+            total_pages = len(doc)
+            
+            for page_num, page in enumerate(doc):
                 pix = page.get_pixmap()
-                temp_image = f"temp_page_{page.number}.png"
+                temp_image = f"temp_page_{page_num}.png"
                 pix.save(temp_image)
                 page_text = self._parse_image(temp_image)
                 text += page_text + "\n\n"
                 if os.path.exists(temp_image):
                     os.remove(temp_image)
+                
+                if progress_callback:
+                    ocr_progress = int(10 + (page_num + 1) / total_pages * 10)
+                    progress_callback(ocr_progress, f"OCR识别中... 第 {page_num + 1}/{total_pages} 页")
+            
             return self._clean_text(text)
         except Exception as e:
             return ""
@@ -116,6 +170,8 @@ class OCRParser:
         for line in lines:
             line = line.strip()
             if not line:
+                if cleaned_lines and cleaned_lines[-1] != '':
+                    cleaned_lines.append('')
                 continue
             
             if self._is_invalid_line(line):
@@ -125,7 +181,6 @@ class OCRParser:
         
         text = '\n'.join(cleaned_lines)
         text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r'\s{2,}', ' ', text)
         
         return text.strip()
 
@@ -133,17 +188,14 @@ class OCRParser:
         if len(line) <= 1:
             return True
         
-        invalid_patterns = [
-            r'^[\s\W]{3,}$',
-            r'^[><=\-\+\*/\|\(\)\[\]{}]{2,}$',
-            r'^[\d]{8,}$',
-            r'^[a-zA-Z]{12,}$',
-            r'^[^\w\u4e00-\u9fff]{4,}$',
-        ]
+        if re.match(r'^[\s\W]{3,}$', line):
+            return True
         
-        for pattern in invalid_patterns:
-            if re.match(pattern, line):
-                return True
+        if re.match(r'^[\d]{8,}$', line):
+            return True
+        
+        if re.match(r'^[a-zA-Z]{15,}$', line):
+            return True
         
         invalid_keywords = ['undefined', 'null', 'NaN', 'error', 'failed']
         line_lower = line.lower()
@@ -154,12 +206,13 @@ class OCRParser:
         char_count = sum(1 for c in line if '\u4e00' <= c <= '\u9fff')
         eng_count = sum(1 for c in line if c.isalpha())
         num_count = sum(1 for c in line if c.isdigit())
+        math_symbols = sum(1 for c in line if c in '=+-*/()[]{}|<>^_∫∑∏√∞≈≠≤≥∈∉⊂⊃∪∩')
         total = len(line)
         
-        if total > 0 and char_count == 0 and eng_count == 0:
+        if total > 0 and char_count == 0 and eng_count == 0 and math_symbols == 0:
             return True
         
-        if total >= 5 and char_count == 0 and num_count >= total * 0.8:
+        if total >= 8 and char_count == 0 and math_symbols == 0 and num_count >= total * 0.9:
             return True
         
         return False

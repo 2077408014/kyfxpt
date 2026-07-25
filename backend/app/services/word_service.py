@@ -77,6 +77,45 @@ class WordService:
         query = self._apply_category_filter(query, user_id, category)
         return query.order_by(UserWord.next_review_date).all()
 
+    def get_review_words_by_range(self, db: Session, user_id: int, time_range: str = "today") -> list:
+        """按时间范围获取复习单词。
+        
+        time_range 可选值:
+        - today: 今日到期（今天及之前）
+        - day: 近一日（最近1天内到期）
+        - week: 近一周（最近7天内到期）
+        - month: 近一月（最近30天内到期）
+        - recommended: 系统推荐（今日到期的单词，按遗忘优先级排序）
+        """
+        today = date.today()
+        
+        if time_range == "today" or time_range == "recommended":
+            end_date = today
+        elif time_range == "day":
+            end_date = today + timedelta(days=1)
+        elif time_range == "week":
+            end_date = today + timedelta(days=7)
+        elif time_range == "month":
+            end_date = today + timedelta(days=30)
+        else:
+            end_date = today
+
+        query = db.query(Word).join(UserWord).filter(
+            UserWord.user_id == user_id,
+            UserWord.next_review_date <= end_date
+        )
+
+        if time_range == "recommended":
+            query = query.order_by(
+                UserWord.next_review_date.asc(),
+                UserWord.mastery_level.asc(),
+                UserWord.review_count.desc()
+            )
+        else:
+            query = query.order_by(UserWord.next_review_date.asc())
+
+        return query.all()
+
     def get_new_words(self, db: Session, user_id: int, count: int = 20, category: str = None) -> list:
         studied_word_ids = [
             uw.word_id for uw in

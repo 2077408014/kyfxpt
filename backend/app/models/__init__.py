@@ -8,3 +8,4 @@ from .study_stat import UserStudyStat
 from .politics import PoliticsRecitation, RecitationReminder
 from .knowledge_base import KnowledgeDocument
 from .password_reset import PasswordResetCode
+from .supervision import StudySupervisionRecord

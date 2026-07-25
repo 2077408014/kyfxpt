@@ -57,6 +57,10 @@ export async function completeRecommendation(id: number, result: string): Promis
   return await request.post(`/recommend/${id}/complete`, { result })
 }
 
+export async function deleteRecommendation(id: number): Promise<{ success: boolean; id: number }> {
+  return await request.delete(`/recommend/${id}`)
+}
+
 export async function getRecommendationReport(): Promise<RecommendationReport> {
   return await request.get('/recommend/report')
 }

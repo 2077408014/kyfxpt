@@ -50,11 +50,16 @@ async def index_document(
     current_user = Depends(get_current_user)
 ):
     progress_key = f"{current_user.id}_{document_id}"
+    import time
     
     if progress_key in index_progress and index_progress[progress_key]["status"] == "running":
-        raise HTTPException(status_code=400, detail="已有索引任务正在进行")
+        elapsed = time.time() - index_progress[progress_key].get("start_time", 0)
+        if elapsed < 1800:
+            raise HTTPException(status_code=400, detail="已有索引任务正在进行")
+        else:
+            del index_progress[progress_key]
     
-    index_progress[progress_key] = {"progress": 0, "message": "准备开始", "status": "running"}
+    index_progress[progress_key] = {"progress": 0, "message": "准备开始", "status": "running", "start_time": time.time()}
     
     async def run_index():
         try:
@@ -122,6 +127,18 @@ async def cancel_index(
         index_progress[progress_key]["message"] = "用户已取消索引"
         return {"success": True, "message": "索引已取消"}
     return {"success": False, "message": "没有正在进行的索引任务"}
+
+
+@router.post("/documents/{document_id}/index/reset")
+async def reset_index_status(
+    document_id: int,
+    current_user = Depends(get_current_user)
+):
+    progress_key = f"{current_user.id}_{document_id}"
+    if progress_key in index_progress:
+        del index_progress[progress_key]
+        return {"success": True, "message": "索引状态已重置"}
+    return {"success": True, "message": "无需重置"}
 
 
 @router.get("/documents")
@@ -198,6 +215,7 @@ class RAGChatRequest(BaseModel):
     top_k: int = 3
     threshold: float = 0.3
     subject: str = None
+    only_knowledge_base: bool = False
 
 
 @router.post("/chat")
@@ -209,7 +227,10 @@ async def rag_chat(
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="请输入问题")
 
-    return ai_service.chat_with_rag(db, current_user.id, body.question.strip(), body.top_k, body.threshold, subject=body.subject)
+    return ai_service.chat_with_rag(
+        db, current_user.id, body.question.strip(), body.top_k, body.threshold,
+        subject=body.subject, only_knowledge_base=body.only_knowledge_base
+    )
 
 
 @router.post("/search")
@@ -223,3 +244,14 @@ async def rag_search(
 
     from ..services.rag_service import rag_service
     return rag_service.search_only(current_user.id, body.question.strip(), body.top_k, body.threshold, subject=body.subject)
+
+
+@router.post("/rebuild-index")
+async def rebuild_index(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    asyncio.create_task(
+        asyncio.to_thread(knowledge_base_service.rebuild_index_async, current_user.id)
+    )
+    return {"success": True, "message": "索引重建任务已启动，正在后台处理"}

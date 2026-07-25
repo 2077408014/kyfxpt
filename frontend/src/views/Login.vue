@@ -60,7 +60,11 @@ async function handleLogin() {
       await router.push('/dashboard')
       ElMessage.success('登录成功')
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.detail || '登录失败')
+      if (error.response?.status === 401) {
+        ElMessage.error('账号或密码错误')
+      } else {
+        ElMessage.error(error.response?.data?.detail || '登录失败')
+      }
     } finally {
       loading.value = false
     }

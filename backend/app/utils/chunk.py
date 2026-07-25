@@ -3,7 +3,7 @@ from typing import List, Dict
 
 
 class TextChunker:
-    def __init__(self, chunk_size: int = 400, chunk_overlap: int = 50):
+    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 100):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.splitter = RecursiveCharacterTextSplitter(

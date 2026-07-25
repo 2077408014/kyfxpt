@@ -20,6 +20,7 @@ export interface User {
   ai_api_key: string | null
   ai_api_model: string | null
   ai_api_base_url: string | null
+  active_ai_config_id: number | null
   created_at: string
 }
 
