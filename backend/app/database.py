@@ -57,6 +57,42 @@ def migrate_database():
             conn.execute(text("ALTER TABLE users ADD COLUMN active_ai_config_id INTEGER"))
             conn.commit()
 
+        if "batch_size" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN batch_size INTEGER DEFAULT 20"))
+            conn.commit()
+
+        if "study_mode" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN study_mode VARCHAR(20) DEFAULT 'mixed'"))
+            conn.commit()
+
+        if "study_session_json" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN study_session_json TEXT"))
+            conn.commit()
+
+        # 迁移 user_words 表：新增 SRS 相关字段
+        result = conn.execute(text("PRAGMA table_info(user_words)"))
+        uw_columns = [row[1] for row in result]
+        if "first_study_date" not in uw_columns:
+            conn.execute(text("ALTER TABLE user_words ADD COLUMN first_study_date DATE"))
+            conn.commit()
+        if "last_rating" not in uw_columns:
+            conn.execute(text("ALTER TABLE user_words ADD COLUMN last_rating VARCHAR(20)"))
+            conn.commit()
+        if "srs_stage" not in uw_columns:
+            conn.execute(text("ALTER TABLE user_words ADD COLUMN srs_stage INTEGER DEFAULT 0"))
+            conn.commit()
+
+        # 迁移 ai_chat_history 表：新增 agent_name 字段，用于多智能体独立上下文
+        result = conn.execute(text("PRAGMA table_info(ai_chat_history)"))
+        chat_columns = [row[1] for row in result]
+        if "agent_name" not in chat_columns:
+            conn.execute(text("ALTER TABLE ai_chat_history ADD COLUMN agent_name VARCHAR(50) NOT NULL DEFAULT 'ai-qa'"))
+            conn.commit()
+
+        if "relevant_chunks" not in chat_columns:
+            conn.execute(text("ALTER TABLE ai_chat_history ADD COLUMN relevant_chunks TEXT"))
+            conn.commit()
+
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_configs'"))
         if not result.scalar():
             conn.execute(text("""
@@ -237,8 +273,8 @@ def _seed_default_user(conn):
     hashed_password = "$2b$12$Iil8zqQTbTDNGwmEXvXyYexJ69S65ul3vw.CrkTDi0CeVtwrjTVcC"
     
     conn.execute(text("""
-        INSERT INTO users (username, email, password, daily_word_count)
-        VALUES ('admin', 'admin@kaoyan.com', :password, 20)
+        INSERT INTO users (username, email, password, daily_word_count, batch_size, study_mode)
+        VALUES ('admin', 'admin@kaoyan.com', :password, 20, 20, 'mixed')
     """), {"password": hashed_password})
     conn.commit()
 

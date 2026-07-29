@@ -49,7 +49,11 @@
         </div>
       </header>
       <div class="content-wrapper">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <keep-alive :max="5">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </div>
     </main>
   </div>

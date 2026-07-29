@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    container_name: kaoyan-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/uploads:/app/uploads
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+
+  frontend:
+    build: ./frontend
+    container_name: kaoyan-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai

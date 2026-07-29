@@ -20,7 +20,15 @@ class SimpleEmbedder:
     def _tokenize(self, text: str) -> List[str]:
         text = text.lower()
         tokens = re.findall(r'[a-zA-Z]+[\w]*|[\u4e00-\u9fff]+', text)
-        return [t for t in tokens if len(t) >= 2]
+        result = []
+        for t in tokens:
+            if len(t) >= 2:
+                result.append(t)
+            if re.match(r'[\u4e00-\u9fff]+', t):
+                for n in range(1, min(len(t) + 1, 5)):
+                    for i in range(len(t) - n + 1):
+                        result.append(t[i:i+n])
+        return result
 
     def _build_vocab(self, texts: List[str], update_only: bool = False):
         if self.fixed_vocab and not update_only:
@@ -52,7 +60,21 @@ class SimpleEmbedder:
             idx = hash(token) % self.dim
             idf_val = self.idf.get(token, avg_idf)
             tfidf = tf[token] * idf_val
-            vec[idx] += tfidf
+            
+            token_len = len(token)
+            if re.match(r'[\u4e00-\u9fff]+', token):
+                if token_len == 1:
+                    weight = 0.3
+                elif token_len == 2:
+                    weight = 0.8
+                elif token_len == 3:
+                    weight = 1.2
+                else:
+                    weight = 1.5
+            else:
+                weight = 1.0
+            
+            vec[idx] += tfidf * weight
 
         norm = math.sqrt(sum(v * v for v in vec))
         if norm > 0:

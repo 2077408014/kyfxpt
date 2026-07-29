@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPExcep
 from sqlalchemy.orm import Session
 from typing import Optional
 from ..database import get_db
-from ..schemas.word import WordResponse, WordStudyRequest, StudyPlanRequest
+from ..schemas.word import WordResponse, WordStudyRequest, StudyPlanRequest, StudySessionData
 from ..services.word_service import word_service
 from ..routers.auth import get_current_user
 from ..models.user import User
@@ -80,7 +80,8 @@ async def get_daily_review_words(
                 "meaning": word.meaning,
                 "example_sentence": word.example_sentence,
                 "exam_requirement": word.exam_requirement,
-                "category": word.category
+                "category": word.category,
+                "type": "review"
             }
             for word in words
         ],
@@ -104,7 +105,8 @@ async def get_review_words_by_range(
                 "meaning": word.meaning,
                 "example_sentence": word.example_sentence,
                 "exam_requirement": word.exam_requirement,
-                "category": word.category
+                "category": word.category,
+                "type": "review"
             }
             for word in words
         ],
@@ -134,7 +136,11 @@ async def get_review_words(
             "mastery_level": item.mastery_level,
             "next_review_date": item.next_review_date.isoformat() if item.next_review_date else None,
             "review_count": item.review_count,
-            "correct_count": item.correct_count
+            "correct_count": item.correct_count,
+            "last_study_date": item.last_study_date.isoformat() if item.last_study_date else None,
+            "first_study_date": item.first_study_date.isoformat() if item.first_study_date else None,
+            "last_rating": item.last_rating,
+            "srs_stage": item.srs_stage
         }
         for item in items
     ]
@@ -151,7 +157,7 @@ async def get_word_list(
     current_user: User = Depends(get_current_user)
 ):
     result = word_service.get_word_list(db, current_user.id, page, page_size, mastery_level, keyword, category)
-    
+
     items = [
         {
             "id": item["id"],
@@ -164,11 +170,14 @@ async def get_word_list(
             "next_review_date": item["next_review_date"].isoformat() if item["next_review_date"] else None,
             "review_count": item["review_count"],
             "correct_count": item["correct_count"],
-            "last_study_date": item["last_study_date"].isoformat() if item["last_study_date"] else None
+            "last_study_date": item["last_study_date"].isoformat() if item["last_study_date"] else None,
+            "first_study_date": item["first_study_date"].isoformat() if item["first_study_date"] else None,
+            "last_rating": item["last_rating"],
+            "srs_stage": item["srs_stage"]
         }
         for item in result["items"]
     ]
-    
+
     return {"total": result["total"], "items": items}
 
 
@@ -184,7 +193,9 @@ async def study_word(
         "mastery_level": result.mastery_level,
         "next_review_date": result.next_review_date.isoformat() if result.next_review_date else None,
         "review_count": result.review_count,
-        "correct_count": result.correct_count
+        "correct_count": result.correct_count,
+        "last_rating": result.last_rating,
+        "srs_stage": result.srs_stage
     }
 
 
@@ -203,6 +214,33 @@ async def save_study_plan(
     current_user: User = Depends(get_current_user)
 ):
     return word_service.save_study_plan(db, current_user.id, data)
+
+
+@router.get("/session")
+async def get_study_session(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    session = word_service.get_study_session(db, current_user.id)
+    return session or {}
+
+
+@router.post("/session")
+async def save_study_session(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return word_service.save_study_session(db, current_user.id, data)
+
+
+@router.delete("/session")
+async def clear_study_session(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    word_service.clear_study_session(db, current_user.id)
+    return {"success": True}
 
 
 @router.post("/upload-wordbook")

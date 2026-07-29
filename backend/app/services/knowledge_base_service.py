@@ -138,7 +138,12 @@ class KnowledgeBaseService:
         try:
             index_rebuilt = False
             
+            def check_cancel():
+                if progress_callback:
+                    progress_callback(0, "检查取消状态")
+            
             if resource.indexed_at:
+                check_cancel()
                 if progress_callback:
                     progress_callback(5, "检测到已有索引，正在清理...")
                 
@@ -188,17 +193,20 @@ class KnowledgeBaseService:
                     progress_callback(100, "索引完成")
                 return
             
+            check_cancel()
             if progress_callback:
                 progress_callback(5, "开始解析文档...")
             
             text = ocr_parser.parse_file(resource.storage_path, progress_callback)
             
+            check_cancel()
             if progress_callback:
                 progress_callback(20, "文档解析完成")
             
             if text:
                 chunks = text_chunker.chunk_file(resource.storage_path, text)
                 
+                check_cancel()
                 if progress_callback:
                     progress_callback(30, f"文档分块完成，共 {len(chunks)} 个分块")
                 
@@ -211,15 +219,18 @@ class KnowledgeBaseService:
                     contents = [chunk["content"] for chunk in chunks]
 
                     try:
+                        check_cancel()
                         if progress_callback:
                             progress_callback(40, "开始生成向量嵌入...")
                         
                         embeddings = get_text_embedder().embed_texts(contents)
                         
+                        check_cancel()
                         if progress_callback:
                             progress_callback(80, "向量生成完成")
                         
                         if embeddings and len(embeddings) > 0 and len(embeddings[0]) > 1:
+                            check_cancel()
                             if progress_callback:
                                 progress_callback(85, "正在保存索引...")
                             
@@ -240,6 +251,8 @@ class KnowledgeBaseService:
                             if progress_callback:
                                 progress_callback(0, "向量生成失败，跳过索引")
                     except Exception as embed_e:
+                        if "取消" in str(embed_e) or "cancelled" in str(embed_e).lower():
+                            raise
                         print(f"Embedding failed for document {resource.id}: {embed_e}")
                         if progress_callback:
                             progress_callback(0, f"向量生成失败: {str(embed_e)}")
@@ -247,6 +260,9 @@ class KnowledgeBaseService:
                 if progress_callback:
                     progress_callback(0, "文档解析失败，未提取到文本")
         except Exception as e:
+            if "取消" in str(e) or "cancelled" in str(e).lower():
+                print(f"Index cancelled for document {resource.id}")
+                raise Exception("用户已取消索引")
             print(f"Indexing failed for document {resource.id}: {e}")
             if progress_callback:
                 progress_callback(0, f"索引失败: {str(e)}")
@@ -446,49 +462,54 @@ class KnowledgeBaseService:
         if index is None or index.ntotal == 0:
             return []
 
-        search_top_k = top_k * 5
-
-        query_vector = get_text_embedder().embed_text(query)
-        query_vector = np.array([query_vector])
-
-        distances, indices = index.search(query_vector, search_top_k)
-
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if idx < 0 or idx >= len(metadata):
-                continue
-
-            distance = distances[0][i]
-            similarity = 1 / (1 + distance)
-
-            if similarity >= threshold:
-                if subject and subject != "全部":
-                    meta = metadata[idx]
-                    doc_subject = meta.get("subject", "未分类")
-                    if doc_subject != subject:
-                        continue
-
-                results.append({
-                    "content": metadata[idx].get("content", ""),
-                    "metadata": metadata[idx],
-                    "similarity": float(similarity)
-                })
-
-                if len(results) >= top_k:
-                    break
+        simplified_query = self._simplify_query(query)
         
-        if enable_keyword_fallback and len(results) < top_k:
-            keyword_results = self._keyword_search(query, metadata, top_k - len(results), subject)
-            existing_ids = {id(r['metadata']) for r in results}
-            for kr in keyword_results:
-                if id(kr['metadata']) not in existing_ids:
-                    kr['similarity'] = max(kr.get('similarity', 0), 0.15)
-                    results.append(kr)
-                    if len(results) >= top_k:
-                        break
+        keyword_results = self._keyword_search(simplified_query, metadata, top_k * 3, subject)
+        
+        if not keyword_results:
+            search_top_k = top_k * 5
+            query_vector = get_text_embedder().embed_text(simplified_query)
+            query_vector = np.array([query_vector])
+            distances, indices = index.search(query_vector, search_top_k)
+            
+            results = []
+            for i, idx in enumerate(indices[0]):
+                if idx < 0 or idx >= len(metadata):
+                    continue
+                distance = distances[0][i]
+                similarity = 1 / (1 + distance)
+                if similarity >= threshold:
+                    if subject and subject != "全部":
+                        meta = metadata[idx]
+                        if meta.get("subject", "未分类") != subject:
+                            continue
+                    meta = metadata[idx]
+                    results.append({
+                        "content": meta.get("content", ""),
+                        "metadata": meta,
+                        "similarity": float(similarity)
+                    })
+            return results[:top_k]
+        
+        keyword_results.sort(key=lambda x: x["similarity"], reverse=True)
+        return keyword_results[:top_k]
 
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results
+    def _simplify_query(self, query: str) -> str:
+        import re
+        q = query.strip()
+        suffixes_to_remove = [
+            '的题目', '的题', '的问题', '的内容', '的知识点', '的相关内容',
+            '是什么', '有哪些', '请列出', '请介绍', '请说明', '求', '计算',
+        ]
+        for suffix in suffixes_to_remove:
+            if q.endswith(suffix) and len(q) > len(suffix) + 1:
+                q = q[:-len(suffix)]
+                break
+        
+        q = re.sub(r'[的了呢吗啊吧呀哦]+$', '', q)
+        q = re.sub(r'[，,。.！!？?、：:；;]+$', '', q)
+        
+        return q.strip()
 
     def _extract_chinese_phrases(self, text: str) -> list:
         import re
@@ -496,7 +517,7 @@ class KnowledgeBaseService:
         chinese = re.findall(r'[\u4e00-\u9fff]+', text)
         for chunk in chinese:
             n = len(chunk)
-            for length in range(min(n, 6), 1, -1):
+            for length in range(min(n, 4), 1, -1):
                 for i in range(n - length + 1):
                     phrases.append(chunk[i:i+length])
         return phrases
@@ -509,19 +530,35 @@ class KnowledgeBaseService:
         phrases = self._extract_chinese_phrases(query_lower)
         english_words = re.findall(r'[a-zA-Z]+', query_lower)
         
-        all_terms = []
+        core_terms = []
         seen = set()
         for p in sorted(phrases, key=len, reverse=True):
             if p not in seen:
-                all_terms.append(p)
+                core_terms.append(p)
                 seen.add(p)
         for w in english_words:
             if w not in seen:
-                all_terms.append(w)
+                core_terms.append(w)
                 seen.add(w)
         
-        if not all_terms:
+        if not core_terms:
             return []
+        
+        query_len = len(query_lower)
+        
+        three_char_phrases = [p for p in phrases if len(p) == 3]
+        two_char_phrases = [p for p in phrases if len(p) == 2]
+        max_three = len(three_char_phrases)
+        max_two = len(two_char_phrases)
+        
+        if query_len >= 4:
+            max_base = 20.0
+        elif query_len == 3:
+            max_base = 12.0
+        else:
+            max_base = 6.0
+        
+        max_possible = max_base + max_three * 2.5 + max_two * 1.5 + 15.0 + 8.0
         
         scored_chunks = []
         
@@ -530,41 +567,67 @@ class KnowledgeBaseService:
             if not content:
                 continue
             
+            if subject and subject != "全部":
+                doc_subject = meta.get("subject", "未分类")
+                if doc_subject != subject:
+                    continue
+            
+            has_exact = query_lower in content
+            
+            matched_phrases = []
+            phrase_positions = {}
+            
+            for term in core_terms:
+                if len(term) >= 2:
+                    pos = content.find(term)
+                    if pos >= 0:
+                        matched_phrases.append(term)
+                        phrase_positions[term] = pos
+            
+            if not matched_phrases:
+                continue
+            
+            best_match_len = max(len(p) for p in matched_phrases)
+            
+            if not has_exact and best_match_len < 2:
+                continue
+            
             score = 0.0
-            matched_long = 0
-            matched_short = 0
             
-            for term in all_terms:
-                if term in content:
-                    term_len = len(term)
-                    if term_len >= 3:
-                        score += term_len * 2.0
-                        matched_long += 1
-                    elif term_len == 2:
-                        score += 2.0
-                        matched_long += 1
-                    else:
-                        score += 0.5
-                        matched_short += 1
+            if best_match_len >= 4:
+                score += 20.0
+            elif best_match_len == 3:
+                score += 12.0
+            elif best_match_len == 2:
+                score += 6.0
             
-            if query_lower in content:
-                score += 10.0
+            three_char_matches = sum(1 for p in matched_phrases if len(p) == 3)
+            two_char_matches = sum(1 for p in matched_phrases if len(p) == 2)
+            score += three_char_matches * 2.5
+            score += two_char_matches * 1.5
             
-            if matched_long > 0 or matched_short >= 3:
-                if subject and subject != "全部":
-                    doc_subject = meta.get("subject", "未分类")
-                    if doc_subject != subject:
-                        continue
-                
-                max_possible = sum(len(t) * 2.0 if len(t) >= 2 else 0.5 for t in all_terms) + 10.0
-                similarity = min(score / max(max_possible, 1.0), 1.0)
-                
-                scored_chunks.append({
-                    "content": meta.get("content", ""),
-                    "metadata": meta,
-                    "similarity": similarity,
-                    "keyword_score": score
-                })
+            if has_exact:
+                score += 15.0
+            
+            if len(matched_phrases) >= 2:
+                positions = [phrase_positions[p] for p in matched_phrases]
+                min_pos = min(positions)
+                max_pos = max(positions)
+                spread = max_pos - min_pos
+                if len(content) > 0:
+                    proximity = max(0, 1.0 - spread / (len(content) * 0.3))
+                    score += proximity * 8.0
+            
+            effective_max = max_possible
+            similarity = min(score / max(effective_max, 1.0), 1.0)
+            
+            scored_chunks.append({
+                "content": meta.get("content", ""),
+                "metadata": meta,
+                "similarity": similarity,
+                "keyword_score": score,
+                "matched_phrases": matched_phrases
+            })
         
         scored_chunks.sort(key=lambda x: x.get("keyword_score", 0), reverse=True)
         return scored_chunks[:top_k]

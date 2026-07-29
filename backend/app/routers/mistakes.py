@@ -119,89 +119,56 @@ async def recognize_mistake(
         return result
     
     try:
-        from ..services.ai_service import ai_service
-        
-        prompt = f"""你是一个专业的考研题目分析助手。请分析以下题目内容，提取并生成以下信息：
+        from ..services.feature_agent_service import feature_agent_service
+
+        prompt = f"""分析以下OCR识别出的考研题目，用自然语言组织输出：
 
 题目内容：
 {question_text}
 
-请严格按照以下JSON格式输出，不要包含任何额外内容：
-{{
-  "subject": "科目名称（只能是：数学/英语/政治/专业课）",
-  "knowledge_point": "知识点名称（如：高等数学-极限、线性代数-矩阵等）",
-  "question_text": "题目完整描述",
-  "answer": "正确答案（数学公式使用LaTeX格式，行内公式用$...$包裹，独立公式用$$...$$包裹）",
-  "analysis": "详细解析过程，包含解题步骤和公式（数学公式使用LaTeX格式）",
-  "difficulty": "难度等级（只能是：简单/中等/困难）",
-  "error_type": "错误类型（只能是：概念错误/计算错误/审题错误）"
-}}
+请按以下格式输出（不要JSON，不要markdown代码块，直接用自然语言）：
 
-要求：
-1. 如果无法识别为考研题目，所有字段返回空字符串""
-2. 答案和解析中的数学公式必须使用标准LaTeX格式
-3. 输出必须是合法的JSON格式，不能包含markdown代码块标记或任何解释文字
-4. 字段值必须严格匹配给定的选项范围，不要使用其他词汇
+## 题目
+[题目完整描述]
+
+## 答案
+[正确答案]
+
+## 解析
+[详细解题步骤和思路]
+
+## 题目信息
+- 科目：[数学/英语/政治/专业课]
+- 知识点：[知识点名称]
+- 难度：[简单/中等/困难]
+- 错误类型：[概念错误/计算错误/审题错误]
 """
         
-        max_retries = 2
-        ai_data = None
-        last_error = ""
+        ai_result = feature_agent_service.chat(
+            db=db,
+            user_id=current_user.id,
+            agent_name='mistake-recognition',
+            message=prompt,
+        )
+        ai_answer = ai_result.get("answer", "")
         
-        for attempt in range(max_retries + 1):
-            try:
-                ai_result = ai_service.chat(db, current_user.id, prompt)
-                answer_text = ai_result.get("answer", "")
-                
-                print(f"[AI识别] AI原始返回: {repr(answer_text[:500])}...")
-                
-                cleaned_text = _clean_markdown_json(answer_text)
-                
-                json_match = re.search(r'\{[\s\S]*\}', cleaned_text)
-                if not json_match:
-                    raise ValueError("未找到JSON内容")
-                
-                ai_data = json.loads(json_match.group(0))
-                
-                if not _validate_json_schema(ai_data):
-                    raise ValueError("JSON schema验证失败")
-                
-                break
-            except json.JSONDecodeError as e:
-                last_error = f"JSON解析错误: {str(e)}"
-                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-            except ValueError as e:
-                last_error = str(e)
-                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-            except Exception as e:
-                last_error = f"未知错误: {str(e)}"
-                print(f"[AI识别] 第{attempt+1}次尝试失败: {last_error}")
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-        
-        if ai_data and _validate_json_schema(ai_data):
-            result["subject"] = ai_data.get("subject", result.get("subject", ""))
-            result["knowledge_point"] = ai_data.get("knowledge_point", result.get("knowledge_point", ""))
-            result["question_text"] = ai_data.get("question_text", question_text)
-            result["answer"] = ai_data.get("answer", "")
-            result["analysis"] = ai_data.get("analysis", "")
-            result["difficulty"] = ai_data.get("difficulty", "")
-            result["error_type"] = ai_data.get("error_type", "")
-            result["confidence"] = 1.0
+        if ai_answer:
+            result["question_text"] = question_text
+            result["answer"] = ai_answer
+            result["analysis"] = ai_answer
+            result["confidence"] = 0.9
         else:
             result["answer"] = None
-            result["analysis"] = f"AI返回的内容格式不正确，已重试{max_retries}次，请重新尝试。错误信息: {last_error}"
+            result["analysis"] = "AI分析失败，请重试"
             result["confidence"] = 0.3
     except Exception as e:
-        print(f"[AI] 识别失败: {e}")
+        print(f"[AI识别] 错误: {e}")
+        import traceback
+        traceback.print_exc()
         result["answer"] = None
-        result["analysis"] = "AI识别服务暂时不可用，请稍后重试"
+        result["analysis"] = f"AI分析出错: {str(e)}"
         result["confidence"] = 0.0
-    
+
     return result
 
 @router.get("/review/today", response_model=list[MistakeResponse])

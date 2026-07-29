@@ -93,11 +93,12 @@ async def generate_recommendations_stream(
 @router.get("/list", response_model=list)
 def get_recommendations(
     completed: bool = Query(None),
+    subject: str = Query(None),
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
-        result = recommendation_service.get_recommendations(db, current_user.id, completed)
+        result = recommendation_service.get_recommendations(db, current_user.id, completed, subject)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

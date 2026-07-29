@@ -1,10 +1,8 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
 from ..models.ai_chat import AIChatHistory
-import requests
 import os
 from dotenv import load_dotenv
-from ..config import settings
 from .llm_service import llm_service
 
 load_dotenv()
@@ -44,12 +42,9 @@ SYSTEM_PROMPT = """你是一个专业的考研复习助手，精通考研英语�
 
 class AIService:
     def __init__(self):
-        self.default_api_key = os.getenv("AI_API_KEY", "")
-        self.default_base_url = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1")
-        self.default_model = os.getenv("AI_MODEL", "deepseek-chat")
+        # 保留 max_tokens/timeout 兜底，但不再读取 .env 中的默认 API/URL/Model 作为回退配置
         self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "2048"))
         self.timeout = int(os.getenv("AI_TIMEOUT", "60"))
-        self.local_llm_available = False
     
     def chat_with_rag(self, db: Session, user_id: int, message: str, top_k: int = 3, threshold: float = 0.3, subject: str = None, only_knowledge_base: bool = False) -> dict:
         from .rag_service import rag_service
@@ -111,53 +106,49 @@ class AIService:
             ).first()
             if config:
                 return {
+                    "name": config.name or config.model or "AI",
                     "api_key": config.api_key,
-                    "base_url": config.base_url or self.default_base_url,
-                    "model": config.model or self.default_model
+                    "base_url": config.base_url or "https://api.deepseek.com/v1",
+                    "model": config.model or "deepseek-chat",
+                    "active": True
                 }
 
-        # 回退到 users 表中的旧配置字段（兼容已有数据）
-        if user and user.ai_api_key:
-            return {
-                "api_key": user.ai_api_key,
-                "base_url": user.ai_api_base_url or self.default_base_url,
-                "model": user.ai_api_model or self.default_model
-            }
-
+        # 未激活任何 ai_configs 配置
         return {
-            "api_key": self.default_api_key,
-            "base_url": self.default_base_url,
-            "model": self.default_model
+            "name": "未启用",
+            "api_key": "",
+            "base_url": "",
+            "model": "",
+            "active": False
         }
 
     def chat(self, db: Session, user_id: int, message: str, skip_save_question: bool = False) -> dict:
         if not skip_save_question:
             self._save_message(db, user_id, "question", message)
-        
-        answer = ""
-        source = "default"
-        
+
         user_config = self._get_user_ai_config(db, user_id)
-        
-        if user_config["api_key"]:
-            try:
-                answer = self._call_ai_model(db, user_id, message, user_config)
-                source = "AI"
-            except Exception as e:
-                print(f"AI API call failed: {e}")
-                answer = f"抱歉，AI 服务调用失败（{e}），暂时无法回答您的问题。请检查 AI 配置是否正确。"
-        elif settings.USE_LOCAL_LLM:
-            try:
-                answer = self._call_local_llm(message)
-                source = "Local LLM"
-            except Exception as e:
-                print(f"Local LLM call failed: {e}")
-                answer = f"抱歉，本地 LLM 调用失败（{e}），暂时无法回答您的问题。"
-        else:
-            answer = "抱歉，尚未配置 AI 服务，无法回答您的问题。请在「AI 配置」页面设置 API。"
-        
+        ai_name = user_config.get("name", "AI")
+
+        # 未激活 AI 配置时，直接返回提示，不再回退到任何默认配置或本地模型
+        if not user_config.get("active") or not user_config.get("api_key"):
+            answer = "您尚未启用任何 AI 配置。请前往「AI 配置」页面，添加一个配置并点击「使用」按钮启用。"
+            self._save_message(db, user_id, "answer", answer, "未配置")
+            return {
+                "answer": answer,
+                "category": "未配置",
+                "suggestions": []
+            }
+
+        try:
+            answer = self._call_ai_model(db, user_id, message, user_config)
+            source = ai_name
+        except Exception as e:
+            print(f"AI API call failed: {e}")
+            answer = f"抱歉，AI 服务调用失败（{e}），暂时无法回答您的问题。请检查 AI 配置是否正确。"
+            source = "调用失败"
+
         self._save_message(db, user_id, "answer", answer, source)
-        
+
         return {
             "answer": answer,
             "category": source,
@@ -216,29 +207,6 @@ class AIService:
         db.query(AIChatHistory).filter(AIChatHistory.user_id == user_id).delete()
         db.commit()
         return True
-    
-    def _call_local_llm(self, message: str) -> str:
-        llm_url = f"{settings.AI_BASE_URL}/chat/completions"
-        
-        payload = {
-            "model": settings.AI_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message}
-            ],
-            "max_tokens": self.max_tokens,
-            "temperature": 0.7
-        }
-        
-        headers = {
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.post(llm_url, json=payload, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
     
     def _call_ai_model(self, db: Session, user_id: int, message: str, config: dict = None) -> str:
         if config is None:

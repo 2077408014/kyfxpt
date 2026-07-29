@@ -69,6 +69,11 @@ export function getDocumentDownloadUrl(id: number): string {
   return `/api/rag/documents/${id}/download?token=${token || ''}`
 }
 
+export function getDocumentPreviewUrl(id: number): string {
+  const token = localStorage.getItem('token')
+  return `/api/rag/documents/${id}/download?token=${token || ''}&preview=true`
+}
+
 export async function deleteDocument(id: number): Promise<{ success: boolean; message: string }> {
   return await axios.delete(`/rag/documents/${id}`)
 }

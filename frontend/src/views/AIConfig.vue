@@ -44,12 +44,12 @@
             </el-button>
             <el-button
               v-else
-              type="info"
+              type="warning"
               size="small"
-              plain
-              disabled
+              :loading="switchingId === config.id"
+              @click="handleDeactivate"
             >
-              正在使用
+              <el-icon><CircleClose /></el-icon>停用
             </el-button>
             <el-button
               size="small"
@@ -150,6 +150,7 @@
       <ul>
         <li>您可以保存多个不同厂商的 AI 配置，随时切换使用</li>
         <li>点击<strong>使用</strong>按钮即可将该配置设为当前活跃的 AI 服务</li>
+        <li>点击<strong>停用</strong>按钮可停用当前配置，系统将使用环境变量中的默认配置</li>
         <li><strong>DeepSeek</strong>：默认 https://api.deepseek.com/v1，模型 deepseek-chat</li>
         <li><strong>智谱AI</strong>：默认 https://open.bigmodel.cn/api/paas/v4，模型 glm-4</li>
         <li><strong>OpenAI</strong>：默认 https://api.openai.com/v1，模型 gpt-3.5-turbo</li>
@@ -164,7 +165,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Delete, Edit, Plus, InfoFilled } from '@element-plus/icons-vue'
+import { Check, Delete, Edit, Plus, InfoFilled, CircleClose } from '@element-plus/icons-vue'
 import {
   listAIConfigs, createAIConfig, updateAIConfig, deleteAIConfig, switchAIConfig, getAIConfig,
   type AIConfigItem, type AIConfigCreateData
@@ -323,6 +324,29 @@ async function handleSwitch(configId: number) {
     ElMessage.success('已切换至该配置')
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '切换失败')
+  } finally {
+    switchingId.value = null
+  }
+}
+
+async function handleDeactivate() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要停用当前配置吗？停用后将使用系统默认配置（环境变量）。',
+      '停用确认',
+      { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  switchingId.value = activeConfigId.value
+  try {
+    await switchAIConfig(null)
+    activeConfigId.value = null
+    ElMessage.success('已停用，将使用系统默认配置')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '停用失败')
   } finally {
     switchingId.value = null
   }

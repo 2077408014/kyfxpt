@@ -1,12 +1,35 @@
+import json
 from sqlalchemy.orm import Session
 from datetime import date, timedelta
 from sqlalchemy import or_
 from ..models.word import Word, UserWord
 from ..models.user import User
 from ..schemas.word import WordStudyRequest, StudyPlanRequest
-from ..utils.memory_curve import calculate_word_next_review
+from ..utils.memory_curve import calculate_word_next_review, get_mastery_level_from_rating
 from ..utils.ocr_parse import ocr_parser
 from ..utils.wordbook_parser import parse_wordbook_text
+from .llm_service import llm_service
+from .ai_service import ai_service
+
+AI_NORMALIZE_PROMPT = """你是一个英语词书文本标准化工具。将以下OCR识别出的词书文本转换成标准格式。
+
+标准格式：每行一个单词条目
+word | meaning
+
+示例：
+initially | ad.最初，开始
+makeup | n.组织；性格；化装品
+prediction | n.预言；预告
+superb | a.壮丽的
+
+要求：
+1. 纠正OCR识别错误（如 pri'dikt→predict, rmost→outermost）
+2. 一行多个单词时拆成多行
+3. 跨行单词合并到一行
+4. 过滤页码、页眉、无关内容
+5. 词性标记（n./v./adj./a./ad./vt./vi./pro等）放在释义里
+6. 不要音标，只要单词和中文释义
+7. 只输出标准化文本，不要任何解释或额外文字"""
 
 
 class WordService:
@@ -61,12 +84,21 @@ class WordService:
             UserWord.last_study_date >= today
         ).count()
 
+        # 今日到期复习数
+        review_due = db.query(UserWord).join(Word).filter(
+            UserWord.user_id == user_id,
+            UserWord.next_review_date <= today
+        )
+        review_due = self._apply_category_filter(review_due, user_id, category)
+        review_due_count = review_due.count()
+
         return {
             "total": total,
             "studied": studied,
             "mastered": mastered,
             "today": today_studied,
-            "has_wordbook": has_wordbook
+            "has_wordbook": has_wordbook,
+            "review_due": review_due_count
         }
 
     def get_daily_review_words(self, db: Session, user_id: int, category: str = None) -> list:
@@ -79,7 +111,7 @@ class WordService:
 
     def get_review_words_by_range(self, db: Session, user_id: int, time_range: str = "today") -> list:
         """按时间范围获取复习单词。
-        
+
         time_range 可选值:
         - today: 今日到期（今天及之前）
         - day: 近一日（最近1天内到期）
@@ -88,7 +120,7 @@ class WordService:
         - recommended: 系统推荐（今日到期的单词，按遗忘优先级排序）
         """
         today = date.today()
-        
+
         if time_range == "today" or time_range == "recommended":
             end_date = today
         elif time_range == "day":
@@ -202,7 +234,10 @@ class WordService:
                 "next_review_date": user_word.next_review_date if user_word else None,
                 "review_count": user_word.review_count if user_word else 0,
                 "correct_count": user_word.correct_count if user_word else 0,
-                "last_study_date": user_word.last_study_date if user_word else None
+                "last_study_date": user_word.last_study_date if user_word else None,
+                "first_study_date": user_word.first_study_date if user_word else None,
+                "last_rating": user_word.last_rating if user_word else None,
+                "srs_stage": user_word.srs_stage if user_word else 0
             })
 
         total = len(filtered_items)
@@ -224,31 +259,32 @@ class WordService:
                 word_id=data.word_id,
                 mastery_level="陌生",
                 review_count=0,
-                correct_count=0
+                correct_count=0,
+                srs_stage=0
             )
             db.add(user_word)
 
         user_word.review_count += 1
+        user_word.last_rating = data.result
+
         if data.result == "认识":
             user_word.correct_count += 1
-            if user_word.mastery_level == "陌生":
-                user_word.mastery_level = "认识"
-            elif user_word.mastery_level == "认识":
-                user_word.mastery_level = "熟悉"
-            elif user_word.mastery_level == "熟悉":
-                user_word.mastery_level = "掌握"
-        elif data.result == "模糊":
-            if user_word.mastery_level == "掌握":
-                user_word.mastery_level = "熟悉"
-            elif user_word.mastery_level == "熟悉":
-                user_word.mastery_level = "认识"
-        elif data.result == "错误":
-            user_word.mastery_level = "陌生"
 
-        next_date, new_level = calculate_word_next_review(
-            user_word.mastery_level, user_word.review_count, user_word.correct_count
+        # 首次学习日期
+        if not user_word.first_study_date:
+            user_word.first_study_date = date.today()
+
+        # 更新掌握程度
+        user_word.mastery_level = get_mastery_level_from_rating(
+            data.result, user_word.mastery_level
+        )
+
+        # 使用新 SRS 算法计算下次复习时间
+        next_date, new_stage = calculate_word_next_review(
+            data.result, user_word.srs_stage
         )
         user_word.next_review_date = next_date
+        user_word.srs_stage = new_stage
         user_word.last_study_date = date.today()
 
         db.commit()
@@ -259,7 +295,9 @@ class WordService:
         user = db.query(User).filter(User.id == user_id).first()
         return {
             "daily_word_count": getattr(user, 'daily_word_count', 20),
-            "word_category": getattr(user, 'selected_word_category', None)
+            "word_category": getattr(user, 'selected_word_category', None),
+            "batch_size": getattr(user, 'batch_size', 20),
+            "study_mode": getattr(user, 'study_mode', 'mixed')
         }
 
     def save_study_plan(self, db: Session, user_id: int, data: StudyPlanRequest) -> dict:
@@ -268,11 +306,58 @@ class WordService:
             user.daily_word_count = data.daily_word_count
             if data.word_category is not None:
                 user.selected_word_category = data.word_category
+            user.batch_size = data.batch_size
+            user.study_mode = data.study_mode
             db.commit()
         return {
             "daily_word_count": data.daily_word_count,
-            "word_category": data.word_category
+            "word_category": data.word_category,
+            "batch_size": data.batch_size,
+            "study_mode": data.study_mode
         }
+
+    def get_study_session(self, db: Session, user_id: int):
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.study_session_json:
+            try:
+                return json.loads(user.study_session_json)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def save_study_session(self, db: Session, user_id: int, session_data: dict) -> dict:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.study_session_json = json.dumps(session_data, ensure_ascii=False)
+            db.commit()
+        return session_data
+
+    def clear_study_session(self, db: Session, user_id: int) -> None:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.study_session_json = None
+            db.commit()
+
+    def _ai_normalize_text(self, text: str, ai_config: dict) -> str:
+        if not ai_config.get("api_key"):
+            return text
+        try:
+            max_chars = 6000
+            truncated = text[:max_chars]
+            if len(text) > max_chars:
+                truncated += "\n\n......(文本过长已截断)......\n\n" + text[-2000:]
+
+            result = llm_service.chat_single_turn(
+                user_message=f"将以下OCR词书文本标准化：\n\n{truncated}",
+                ai_config=ai_config,
+                system_prompt=AI_NORMALIZE_PROMPT,
+                temperature=0.3,
+                max_tokens=4096,
+            )
+            return result.strip()
+        except Exception as e:
+            print(f"[AI Normalize] AI格式化失败: {e}")
+            return text
 
     def upload_wordbook(self, db: Session, user_id: int, file_content: bytes, filename: str,
                         category: str = "我的词书") -> dict:
@@ -297,7 +382,29 @@ class WordService:
         if not text or len(text.strip()) < 10:
             return {"success": False, "message": "未能从文件中解析出文本内容"}
 
+        # 正则全文解析（快，不丢词）
         words = parse_wordbook_text(text)
+
+        # AI 纠错（只修正 OCR 拼写错误，不替换全文）
+        ai_config = ai_service._get_user_ai_config(db, user_id)
+        if ai_config.get("api_key") and words:
+            normalized = self._ai_normalize_text(text, ai_config)
+            if normalized and normalized != text:
+                ai_words = parse_wordbook_text(normalized)
+                if ai_words:
+                    ai_word_list = [w['word'] for w in ai_words if w.get('word')]
+                    for w in words:
+                        raw = w['word']
+                        # 在 AI 结果中找最相似单词（处理 rmost → outermost 类纠错）
+                        best = next((aw for aw in ai_word_list
+                                     if raw.lower() == aw.lower()), None)
+                        if not best:
+                            best = next((aw for aw in ai_word_list
+                                         if raw.lower() in aw.lower()
+                                         or aw.lower() in raw.lower()), None)
+                        if best and best != raw:
+                            w['word'] = best
+
         if not words:
             return {"success": False, "message": "未识别到有效单词，请检查词书格式（每行：单词 [音标] 释义）"}
 

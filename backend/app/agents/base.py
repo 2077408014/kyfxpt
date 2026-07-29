@@ -110,6 +110,12 @@ class AgentRegistry:
         if agent_name in self._agents:
             self._agents[agent_name].enabled = enabled
     
+    def is_agent_enabled(self, agent_name: str) -> bool:
+        agent = self._agents.get(agent_name)
+        if agent:
+            return agent.enabled
+        return True
+    
     def is_empty(self) -> bool:
         return len(self._agents) == 0
 

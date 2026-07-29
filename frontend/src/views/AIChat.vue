@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="ai-chat">
     <div class="chat-container">
       <div class="chat-header">
@@ -25,7 +25,25 @@
               <span v-if="msg.fromKnowledgeBase" class="knowledge-badge">
                 <el-icon><DataLine /></el-icon>知识库
               </span>
-              <span v-if="msg.source" class="source">{{ msg.source }}</span>
+              <el-tag v-if="msg.source && msg.source !== 'AI系统' && msg.source !== '调用失败'" size="small" type="info" effect="plain" class="ai-name-tag">
+                <el-icon><Cpu /></el-icon>{{ msg.source }}
+              </el-tag>
+              <el-tag v-else-if="msg.source === '调用失败'" size="small" type="danger" effect="plain" class="ai-name-tag">
+                <el-icon><WarningFilled /></el-icon>{{ msg.source }}
+              </el-tag>
+              <span v-else-if="msg.source" class="source">{{ msg.source }}</span>
+              <el-button
+                v-if="msg.lastUserMessage"
+                size="small"
+                :type="msg.failed ? 'primary' : 'default'"
+                text
+                class="regenerate-btn"
+                :loading="regeneratingIds[msg.id]"
+                :disabled="loading"
+                @click="regenerateMessage(msg)"
+              >
+                <el-icon><RefreshRight /></el-icon>{{ msg.failed ? '重新生成' : '重新回答' }}
+              </el-button>
             </div>
           </div>
         </div>
@@ -84,9 +102,9 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Message, Delete, Refresh, Tools, DataLine } from '@element-plus/icons-vue'
-import { chat, command, getHistory, clearHistory } from '../api/ai'
-import { ragChat, type RAGChatResult } from '../api/rag'
+import { User, Message, Delete, Refresh, Tools, Cpu, RefreshRight, WarningFilled } from '@element-plus/icons-vue'
+import { command } from '../api/ai'
+import { agentChat, getAgentHistory, clearAgentHistory } from '../api/agent'
 import { marked } from 'marked'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -103,6 +121,7 @@ const loading = ref(false)
 const suggestions = ref<string[]>([])
 const chatContainerRef = ref<HTMLElement | null>(null)
 const lastSentTime = ref(0)
+const regeneratingIds = ref<Record<string | number, boolean>>({})
 
 function goToConfig() {
   router.push('/dashboard/ai-config')
@@ -123,6 +142,10 @@ function renderMathFormula(formula: string, displayMode: boolean): string {
 
 function normalizeLatex(formula: string): string {
   let result = formula
+  
+  // 修正常见的 AI 拼写错误：inftyty, infinity 等 -> \infty
+  result = result.replace(/\\?inftyty/g, '\\infty')
+  result = result.replace(/\\?infinity/g, '\\infty')
   
   result = result.replace(/\\lim_\{([^}]+)\}/g, '\\lim_{$1}')
   result = result.replace(/\\lim\s*\{([^}]+)\}/g, '\\lim_{$1}')
@@ -145,7 +168,14 @@ function normalizeLatex(formula: string): string {
   result = result.replace(/_([a-zA-Z0-9]+)/g, '_{$1}')
   
   result = result.replace(/\*/g, ' \\cdot ')
-  result = result.replace(/inf/g, '\\infty')
+  
+  // 精确替换独立的 inf 为 \infty，避免误伤 \infty, \int 等
+  // 替换 "_inf" -> "_{\infty}"
+  result = result.replace(/_\s*inf\b/g, '_{\\infty}')
+  // 替换 "\to inf" -> "\to \infty"
+  result = result.replace(/\\to\s+inf\b/g, '\\to \\infty')
+  // 替换开头或单独的 "inf" -> "\infty" (但不替换 \infty 或 \int 中的 inf)
+  result = result.replace(/(?<!\\)inf\b/g, '\\infty')
   
   return result.trim()
 }
@@ -229,20 +259,34 @@ function renderMarkdown(text: string): string {
 
 async function loadHistory() {
   try {
-    const history = await getHistory()
-    messages.value = history.map(msg => ({
+    const history = await getAgentHistory('ai-qa', 50)
+    const list = history.map(msg => ({
       id: msg.id,
       role: msg.message_type === 'question' ? 'user' : 'ai',
       content: msg.content,
-      source: msg.source
+      source: msg.source,
+      lastUserMessage: ''
     }))
-    
+
+    // 为每条 AI 消息关联它前一条用户消息，便于"重新回答"
+    let prevUser = ''
+    for (const item of list) {
+      if (item.role === 'user') {
+        prevUser = item.content
+      } else if (item.role === 'ai') {
+        item.lastUserMessage = prevUser
+      }
+    }
+
+    messages.value = list
+
     if (messages.value.length === 0) {
       messages.value.push({
         id: 1,
         role: 'ai',
         content: '你好！我是考研复习平台的AI助手。请问有什么我可以帮你的？',
-        source: 'AI系统'
+        source: 'AI系统',
+        lastUserMessage: ''
       })
     }
   } catch {
@@ -250,7 +294,8 @@ async function loadHistory() {
       id: 1,
       role: 'ai',
       content: '你好！我是考研复习平台的AI助手。请问有什么我可以帮你的？',
-      source: 'AI系统'
+      source: 'AI系统',
+      lastUserMessage: ''
     })
   }
 }
@@ -269,11 +314,11 @@ async function handleSend() {
   }
 
   const userMsg = inputMessage.value.trim()
-  
+
   loading.value = true
   inputMessage.value = ''
   lastSentTime.value = now
-  
+
   const lastMessage = messages.value[messages.value.length - 1]
   if (lastMessage && lastMessage.role === 'user' && lastMessage.content === userMsg) {
     loading.value = false
@@ -289,28 +334,82 @@ async function handleSend() {
   suggestions.value = []
 
   try {
-    const ragResult: RAGChatResult = await ragChat(userMsg)
+    const result = await agentChat({ agent_name: 'ai-qa', message: userMsg })
 
     messages.value.push({
       id: Date.now() + 1,
       role: 'ai',
-      content: ragResult.answer,
-      source: ragResult.source || (ragResult.from_knowledge_base ? '知识库' : 'AI'),
-      fromKnowledgeBase: ragResult.from_knowledge_base,
-      relevantChunks: ragResult.relevant_chunks
+      content: result.answer || '暂无回答',
+      source: result.source || 'AI',
+      fromKnowledgeBase: false,
+      lastUserMessage: userMsg
     })
 
     handleRouteNavigation(userMsg)
   } catch (error: any) {
+    const errorMsg = error.response?.data?.detail || error.message || '抱歉，我暂时无法回答这个问题。'
     messages.value.push({
       id: Date.now() + 1,
       role: 'ai',
-      content: error.response?.data?.detail || '抱歉，我暂时无法回答这个问题。',
-      source: 'AI系统',
-      fromKnowledgeBase: false
+      content: errorMsg,
+      source: '调用失败',
+      fromKnowledgeBase: false,
+      failed: true,
+      lastUserMessage: userMsg
     })
   } finally {
     loading.value = false
+  }
+}
+
+async function regenerateMessage(failedMsg: any) {
+  const userMsg = failedMsg.lastUserMessage
+  if (!userMsg) {
+    ElMessage.warning('没有可重新生成的问题')
+    return
+  }
+  if (loading.value || regeneratingIds.value[failedMsg.id]) return
+
+  regeneratingIds.value[failedMsg.id] = true
+
+  try {
+    const result = await agentChat({ agent_name: 'ai-qa', message: userMsg })
+
+    const newMsg = {
+      id: Date.now() + 1,
+      role: 'ai',
+      content: result.answer || '暂无回答',
+      source: result.source || 'AI',
+      fromKnowledgeBase: false,
+      lastUserMessage: userMsg
+    }
+
+    // 替换原失败/旧回答
+    const idx = messages.value.findIndex(m => m.id === failedMsg.id)
+    if (idx >= 0) {
+      messages.value.splice(idx, 1, newMsg)
+    } else {
+      messages.value.push(newMsg)
+    }
+  } catch (error: any) {
+    const errorMsg = error.response?.data?.detail || error.message || '抱歉，我暂时无法回答这个问题。'
+    const errorAiMsg = {
+      id: Date.now() + 1,
+      role: 'ai',
+      content: errorMsg,
+      source: '调用失败',
+      fromKnowledgeBase: false,
+      failed: true,
+      lastUserMessage: userMsg
+    }
+    const idx = messages.value.findIndex(m => m.id === failedMsg.id)
+    if (idx >= 0) {
+      messages.value.splice(idx, 1, errorAiMsg)
+    } else {
+      messages.value.push(errorAiMsg)
+    }
+  } finally {
+    regeneratingIds.value[failedMsg.id] = false
   }
 }
 
@@ -377,12 +476,13 @@ function sendSuggestion(suggestion: string) {
 
 async function handleClearHistory() {
   try {
-    await clearHistory()
+    await clearAgentHistory('ai-qa')
     messages.value = [{
       id: 1,
       role: 'ai',
       content: '你好！我是考研复习平台的AI助手。请问有什么我可以帮你的？',
-      source: 'AI系统'
+      source: 'AI系统',
+      lastUserMessage: ''
     }]
     ElMessage.success('聊天记录已清除')
   } catch (error: any) {
@@ -576,6 +676,26 @@ onMounted(() => {
 
 .message.user .source {
   color: rgba(255, 255, 255, 0.7);
+}
+
+.ai-name-tag {
+  font-size: 11px;
+}
+
+.ai-name-tag .el-icon {
+  margin-right: 3px;
+  font-size: 11px;
+}
+
+.regenerate-btn {
+  font-size: 12px;
+  margin-left: 4px;
+  padding: 2px 8px;
+}
+
+.regenerate-btn .el-icon {
+  font-size: 12px;
+  margin-right: 2px;
 }
 
 .suggestions {

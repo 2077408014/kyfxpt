@@ -27,55 +27,92 @@
       <el-tab-pane label="今日学习" name="today">
         <div class="study-section">
           <div class="plan-bar">
-              <el-form :inline="true">
-                <el-form-item label="词汇分类">
-                  <el-select
-                    v-model="selectedCategory"
-                    placeholder="选择词汇分类"
-                    style="width: 150px"
-                    clearable
-                    @change="handleCategoryChange"
-                  >
-                    <el-option label="全部" value="" />
-                    <el-option v-for="cat in categories" :key="cat" :label="cat" :value="cat" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="每日学习量">
-                  <el-slider v-model="dailyCount" :min="5" :max="100" :step="5" style="width: 200px" />
-                  <span style="margin-left: 12px">{{ dailyCount }} 词</span>
-                </el-form-item>
-                <el-form-item>
-                  <el-button type="primary" @click="savePlan">保存计划</el-button>
-                </el-form-item>
-                <el-form-item>
-                  <el-button type="success" :loading="uploadingWordbook" @click="triggerWordbookUpload">
-                    <el-icon><Upload /></el-icon>上传词书
-                  </el-button>
-                  <input
-                    ref="wordbookInput"
-                    type="file"
-                    accept=".pdf,.txt,.doc,.docx"
-                    class="hidden-input"
-                    @change="handleWordbookSelect"
-                  />
-                </el-form-item>
-              </el-form>
-              <div class="daily-stats">
-                <span class="daily-stat-item">
-                  <el-tag type="warning">待复习: {{ reviewCount }}</el-tag>
-                </span>
-                <span class="daily-stat-item">
-                  <el-tag type="success">新单词: {{ newCount }}</el-tag>
-                </span>
-              </div>
+            <el-form :inline="true">
+              <el-form-item label="词汇分类">
+                <el-select
+                  v-model="selectedCategory"
+                  placeholder="选择词汇分类"
+                  style="width: 150px"
+                  clearable
+                  @change="handleCategoryChange"
+                >
+                  <el-option label="全部" value="" />
+                  <el-option v-for="cat in categories" :key="cat" :label="cat" :value="cat" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="每日学习量">
+                <el-slider v-model="dailyCount" :min="5" :max="100" :step="5" style="width: 160px" />
+                <span style="margin-left: 12px">{{ dailyCount }} 词</span>
+              </el-form-item>
+              <el-form-item label="每轮批次">
+                <el-slider v-model="batchSize" :min="5" :max="dailyCount" :step="5" style="width: 140px" />
+                <span style="margin-left: 12px">{{ batchSize }} 词</span>
+                <span v-if="batchSize > dailyCount" style="color: #f56c6c; margin-left: 8px; font-size: 12px">不能大于每日总量</span>
+              </el-form-item>
+              <el-form-item label="背诵模式">
+                <el-radio-group v-model="studyMode">
+                  <el-radio-button label="mixed">混合模式</el-radio-button>
+                  <el-radio-button label="new_first">新词优先</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="savePlan">保存背诵配置</el-button>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="success" :loading="uploadingWordbook" @click="triggerWordbookUpload">
+                  <el-icon><Upload /></el-icon>上传词书
+                </el-button>
+                <input
+                  ref="wordbookInput"
+                  type="file"
+                  accept=".pdf,.txt,.doc,.docx"
+                  class="hidden-input"
+                  @change="handleWordbookSelect"
+                />
+              </el-form-item>
+            </el-form>
+            <div class="daily-stats">
+              <span class="daily-stat-item">
+                <el-tag type="warning">待复习: {{ reviewCount }}</el-tag>
+              </span>
+              <span class="daily-stat-item">
+                <el-tag type="success">新单词: {{ newCount }}</el-tag>
+              </span>
+              <span class="daily-stat-item">
+                <el-tag type="info">今日到期: {{ wordStats.review_due || 0 }}</el-tag>
+              </span>
             </div>
+          </div>
 
+          <!-- 轮次进度条 -->
+          <div v-if="totalRounds > 0" class="round-progress-bar">
+            <div class="progress-info">
+              <span>全局进度: {{ globalIndex }} / {{ totalWordsToday }}</span>
+              <span v-if="currentRound > 0 && currentRound <= totalRounds">
+                | 第 {{ currentRound }} / {{ totalRounds }} 轮
+              </span>
+              <span v-if="currentRound > 0 && currentRound <= totalRounds">
+                | 本轮剩余: {{ roundQueue.length }} / {{ currentRoundSize }}
+              </span>
+            </div>
+            <el-progress
+              :percentage="Math.round((globalIndex / Math.max(totalWordsToday, 1)) * 100)"
+              :stroke-width="10"
+              status="success"
+            />
+          </div>
+
+          <!-- 单词卡片 -->
           <div v-if="currentWord" class="word-card">
             <div class="word-header">
-              <span class="word-number">{{ currentIndex + 1 }} / {{ todayWords.length }}</span>
+              <span class="word-number">
+                全局 {{ globalIndex + 1 }} / {{ totalWordsToday }}
+                <span v-if="currentRound > 0"> | 本轮 {{ currentRoundIndex + 1 }} / {{ currentRoundSize }}</span>
+              </span>
               <span class="word-tag">{{ currentWord.exam_requirement }}</span>
-              <span v-if="currentIndex < reviewCount" class="review-badge">复习</span>
-              <span v-else class="new-badge">新单词</span>
+              <span :class="currentWord.type === 'review' ? 'review-badge' : 'new-badge'">
+                {{ currentWord.type === 'review' ? '复习' : '新单词' }}
+              </span>
             </div>
             <h2 class="word">{{ currentWord.word }}</h2>
             <p class="phonetic">{{ currentWord.phonetic }}</p>
@@ -97,13 +134,24 @@
               </p>
             </div>
             <div class="study-buttons">
-              <el-button type="danger" @click="markResult('错误')">不认识</el-button>
-              <el-button type="warning" @click="markResult('模糊')">模糊</el-button>
-              <el-button type="success" @click="markResult('认识')">认识</el-button>
+              <el-button type="danger" size="large" @click="markResult('不认识')">不认识</el-button>
+              <el-button type="warning" size="large" @click="markResult('模糊')">模糊</el-button>
+              <el-button type="success" size="large" @click="markResult('认识')">认识</el-button>
             </div>
           </div>
+
+          <!-- 今日完成 -->
+          <div v-else-if="allRoundsComplete" class="empty-state">
+            <el-empty description="今日所有轮次已完成！">
+              <el-button type="primary" @click="restartToday">重新开始今日学习</el-button>
+            </el-empty>
+          </div>
+
+          <!-- 空状态 -->
           <div v-else class="empty-state">
-            <el-empty description="今日单词已学完" />
+            <el-empty description="今日单词已学完">
+              <el-button type="primary" @click="loadTodayWords">重新加载</el-button>
+            </el-empty>
           </div>
         </div>
       </el-tab-pane>
@@ -119,6 +167,7 @@
                   style="width: 150px"
                   @change="loadReviewWords"
                 >
+                  <el-option label="今日到期" value="today" />
                   <el-option label="近一日" value="day" />
                   <el-option label="近一周" value="week" />
                   <el-option label="近一月" value="month" />
@@ -126,7 +175,7 @@
                 </el-select>
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" @click="loadReviewWords">开始复习</el-button>
+                <el-button type="primary" @click="loadReviewWords">刷新列表</el-button>
               </el-form-item>
             </el-form>
             <div class="daily-stats">
@@ -136,40 +185,19 @@
             </div>
           </div>
 
-          <div v-if="currentReviewWord" class="word-card">
-            <div class="word-header">
-              <span class="word-number">{{ reviewIndex + 1 }} / {{ reviewWords.length }}</span>
-              <span class="word-tag">{{ currentReviewWord.exam_requirement }}</span>
-              <span class="review-badge">复习</span>
-            </div>
-            <h2 class="word">{{ currentReviewWord.word }}</h2>
-            <p class="phonetic">{{ currentReviewWord.phonetic }}</p>
-            <div class="word-actions">
-              <el-button @click="showReviewMeaning = !showReviewMeaning">
-                {{ showReviewMeaning ? '隐藏释义' : '显示释义' }}
-              </el-button>
-              <el-button @click="speakWord(currentReviewWord.word)">
-                <el-icon><VideoPlay /></el-icon>发音
-              </el-button>
-            </div>
-            <div v-if="showReviewMeaning" class="word-detail">
-              <p class="meaning">{{ currentReviewWord.meaning }}</p>
-              <p v-if="currentReviewWord.example_sentence" class="example">
-                例句：{{ currentReviewWord.example_sentence }}
-                <el-button size="small" text @click="speakWord(currentReviewWord.example_sentence)">
-                  <el-icon><VideoPlay /></el-icon>朗读
+          <el-table :data="reviewWords" border style="margin-top: 12px">
+            <el-table-column prop="word" label="单词" width="140" />
+            <el-table-column prop="phonetic" label="音标" width="140" />
+            <el-table-column prop="meaning" label="释义" />
+            <el-table-column prop="exam_requirement" label="标签" width="100" />
+            <el-table-column label="操作" width="120">
+              <template #default="scope">
+                <el-button size="small" @click="speakWord(scope.row.word)">
+                  <el-icon><VideoPlay /></el-icon>发音
                 </el-button>
-              </p>
-            </div>
-            <div class="study-buttons">
-              <el-button type="danger" @click="markReviewResult('错误')">不认识</el-button>
-              <el-button type="warning" @click="markReviewResult('模糊')">模糊</el-button>
-              <el-button type="success" @click="markReviewResult('认识')">认识</el-button>
-            </div>
-          </div>
-          <div v-else class="empty-state">
-            <el-empty description="暂无需要复习的单词" />
-          </div>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
       </el-tab-pane>
 
@@ -211,6 +239,11 @@
               </template>
             </el-table-column>
             <el-table-column prop="review_count" label="复习次数" width="100" />
+            <el-table-column prop="next_review_date" label="下次复习" width="120">
+              <template #default="scope">
+                {{ scope.row.next_review_date ? scope.row.next_review_date.substring(0, 10) : '-' }}
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="120">
               <template #default="scope">
                 <el-button size="small" @click="speakWord(scope.row.word)">
@@ -233,6 +266,54 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 轮次完成弹窗 -->
+    <el-dialog
+      v-model="roundCompleteVisible"
+      title="本轮完成！"
+      width="400px"
+      :close-on-click-modal="false"
+      :show-close="false"
+    >
+      <div class="round-stats">
+        <p class="round-stats-title">第 {{ currentRound }} 轮统计</p>
+        <div class="round-stats-grid">
+          <div class="round-stat-item success">
+            <span class="stat-num">{{ roundStats.known }}</span>
+            <span class="stat-label">认识</span>
+          </div>
+          <div class="round-stat-item warning">
+            <span class="stat-num">{{ roundStats.vague }}</span>
+            <span class="stat-label">模糊</span>
+          </div>
+          <div class="round-stat-item danger">
+            <span class="stat-num">{{ roundStats.unknown }}</span>
+            <span class="stat-label">不认识</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="exitStudy">退出背诵</el-button>
+        <el-button type="primary" @click="startNextRound">开启下一轮</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 恢复进度弹窗 -->
+    <el-dialog
+      v-model="resumeVisible"
+      title="恢复背诵进度"
+      width="360px"
+    >
+      <p>检测到未完成的背诵进度，是否继续？</p>
+      <p style="color: #999; font-size: 14px; margin-top: 8px">
+        第 {{ savedSession?.current_round }} / {{ savedSession?.total_rounds }} 轮，
+        剩余 {{ savedSession?.round_queue?.length || 0 }} 个单词
+      </p>
+      <template #footer>
+        <el-button @click="discardSession">重新开始</el-button>
+        <el-button type="primary" @click="resumeSession">继续背诵</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -243,8 +324,8 @@ import { VideoPlay, Upload } from '@element-plus/icons-vue'
 import {
   getWordStats, getTodayWords, getWordList,
   studyWord, getStudyPlan, saveStudyPlan, getWordCategories, uploadWordbook,
-  getReviewWordsByRange,
-  type Word, type UserWord, type TodayWordsResponse
+  getReviewWordsByRange, getStudySession, saveStudySession, clearStudySession,
+  type Word, type UserWord, type TodayWordsResponse, type StudySession, type RoundQueueItem
 } from '../../api/words'
 import { useSpeech } from '@/composables/useSpeech'
 
@@ -256,38 +337,74 @@ const wordStats = reactive({
   studied: 0,
   mastered: 0,
   today: 0,
-  has_wordbook: false
+  has_wordbook: false,
+  review_due: 0
 })
 const uploadingWordbook = ref(false)
 const wordbookInput = ref<HTMLInputElement | null>(null)
+
+// 计划配置
 const dailyCount = ref(20)
+const batchSize = ref(20)
+const studyMode = ref('mixed')
+const selectedCategory = ref<string>('')
+const categories = ref<string[]>([])
+
+// 今日单词数据
 const todayWords = ref<Word[]>([])
-const currentIndex = ref(0)
+const reviewCount = ref(0)
+const newCount = ref(0)
+
+// 轮次状态
+const currentRound = ref(0)
+const totalRounds = ref(0)
+const roundQueue = ref<RoundQueueItem[]>([])
+const roundStats = reactive({ known: 0, vague: 0, unknown: 0 })
+const globalIndex = ref(0)
+const totalWordsToday = ref(0)
+const completedRounds = ref(0)
+const allRoundsComplete = ref(false)
+
+// UI 状态
 const showMeaning = ref(false)
+const roundCompleteVisible = ref(false)
+const resumeVisible = ref(false)
+const savedSession = ref<StudySession | null>(null)
+
+// 单词列表
 const wordList = ref<UserWord[]>([])
 const searchKeyword = ref('')
 const filterLevel = ref('')
 const currentPage = ref(1)
 const pageSize = ref(20)
 const totalWords = ref(0)
-const reviewCount = ref(0)
-const newCount = ref(0)
 
-const currentWord = ref<Word | null>(null)
-const categories = ref<string[]>([])
-const selectedCategory = ref<string>('')
-
+// 复习列表
 const reviewWords = ref<Word[]>([])
-const reviewIndex = ref(0)
-const showReviewMeaning = ref(false)
 const reviewRange = ref('today')
-const currentReviewWord = ref<Word | null>(null)
 
 const currentSourceLabel = computed(() => {
   const cat = selectedCategory.value
   if (!cat || cat === '全部') return '系统+词书'
   if (cat === '我的词书') return '我的词书'
   return cat
+})
+
+const currentWord = computed<RoundQueueItem | null>(() => {
+  return roundQueue.value.length > 0 ? roundQueue.value[0] : null
+})
+
+const currentRoundIndex = computed(() => {
+  if (currentRound.value <= 0 || currentRound.value > totalRounds.value) return 0
+  const roundStart = (currentRound.value - 1) * batchSize.value
+  return globalIndex.value - roundStart
+})
+
+const currentRoundSize = computed(() => {
+  if (currentRound.value <= 0 || currentRound.value > totalRounds.value) return 0
+  const start = (currentRound.value - 1) * batchSize.value
+  const end = Math.min(start + batchSize.value, totalWordsToday.value)
+  return end - start
 })
 
 function getMasteryTagType(level: string) {
@@ -310,6 +427,7 @@ async function loadStats(category?: string) {
     wordStats.studied = 0
     wordStats.mastered = 0
     wordStats.today = 0
+    wordStats.review_due = 0
   }
 }
 
@@ -317,11 +435,15 @@ async function loadPlan() {
   try {
     const plan = await getStudyPlan()
     dailyCount.value = plan.daily_word_count
+    batchSize.value = plan.batch_size ?? 20
+    studyMode.value = plan.study_mode ?? 'mixed'
     if (plan.word_category !== null && plan.word_category !== undefined) {
       selectedCategory.value = plan.word_category
     }
   } catch {
     dailyCount.value = 20
+    batchSize.value = 20
+    studyMode.value = 'mixed'
   }
 }
 
@@ -336,12 +458,12 @@ async function loadCategories() {
 
 async function savePlan() {
   try {
-    await saveStudyPlan(dailyCount.value, selectedCategory.value || undefined)
+    await saveStudyPlan(dailyCount.value, selectedCategory.value || undefined, batchSize.value, studyMode.value)
+    ElMessage.success('背诵配置已保存')
     await loadTodayWords()
-    ElMessage.success('学习计划已保存')
   } catch {
+    ElMessage.success(`配置已保存：每日${dailyCount.value}词，每轮${batchSize.value}词`)
     await loadTodayWords()
-    ElMessage.success(`学习计划已保存：每日${dailyCount.value}词`)
   }
 }
 
@@ -349,37 +471,251 @@ async function loadTodayWords() {
   try {
     const category = selectedCategory.value || undefined
     const result: TodayWordsResponse = await getTodayWords(dailyCount.value, category)
-    todayWords.value = [...result.review, ...result.new]
+
+    // 根据背诵模式排序单词
+    if (studyMode.value === 'new_first') {
+      todayWords.value = [...result.new, ...result.review]
+    } else {
+      todayWords.value = [...result.review, ...result.new]
+    }
+
     reviewCount.value = result.review_count
     newCount.value = result.new_count
-    currentIndex.value = 0
-    currentWord.value = todayWords.value[0] || null
-    showMeaning.value = false
+    totalWordsToday.value = result.total_today
+    globalIndex.value = 0
+    completedRounds.value = 0
+    allRoundsComplete.value = false
+
+    // 构建轮次
+    buildRounds()
+
+    // 启动第一轮
+    if (totalRounds.value > 0) {
+      await startRound(1)
+    } else {
+      roundQueue.value = []
+    }
   } catch {
     todayWords.value = [
-      { id: 1, word: 'abandon', phonetic: '/əˈbændən/', meaning: 'v. 放弃，抛弃', example_sentence: 'He decided to abandon the project.', difficulty: 1, frequency: 95, exam_requirement: '高频词' },
-      { id: 2, word: 'ability', phonetic: '/əˈbɪləti/', meaning: 'n. 能力，才能', example_sentence: 'She has the ability to learn quickly.', difficulty: 1, frequency: 88, exam_requirement: '考纲词' },
-      { id: 3, word: 'absolute', phonetic: '/ˈæbsəluːt/', meaning: 'adj. 绝对的，完全的', example_sentence: 'This is an absolute truth.', difficulty: 2, frequency: 75, exam_requirement: '考纲词' },
+      { id: 1, word: 'abandon', phonetic: '/əˈbændən/', meaning: 'v. 放弃，抛弃', example_sentence: 'He decided to abandon the project.', difficulty: 1, frequency: 95, exam_requirement: '高频词', type: 'new' },
+      { id: 2, word: 'ability', phonetic: '/əˈbɪləti/', meaning: 'n. 能力，才能', example_sentence: 'She has the ability to learn quickly.', difficulty: 1, frequency: 88, exam_requirement: '考纲词', type: 'new' },
+      { id: 3, word: 'absolute', phonetic: '/ˈæbsəluːt/', meaning: 'adj. 绝对的，完全的', example_sentence: 'This is an absolute truth.', difficulty: 2, frequency: 75, exam_requirement: '考纲词', type: 'new' },
     ]
     reviewCount.value = 0
     newCount.value = todayWords.value.length
-    currentWord.value = todayWords.value[0]
+    totalWordsToday.value = todayWords.value.length
+    buildRounds()
+    if (totalRounds.value > 0) await startRound(1)
   }
+}
+
+function buildRounds() {
+  if (!todayWords.value.length) {
+    totalRounds.value = 0
+    return
+  }
+
+  const total = todayWords.value.length
+  totalRounds.value = Math.ceil(total / batchSize.value)
+}
+
+async function startRound(roundNum: number) {
+  if (roundNum > totalRounds.value) {
+    allRoundsComplete.value = true
+    roundQueue.value = []
+    currentRound.value = totalRounds.value
+    await clearStudySession()
+    return
+  }
+
+  currentRound.value = roundNum
+  const start = (roundNum - 1) * batchSize.value
+  const end = Math.min(start + batchSize.value, totalWordsToday.value)
+  const roundWords = todayWords.value.slice(start, end)
+
+  roundQueue.value = roundWords.map(w => ({
+    wordId: w.id,
+    word: w.word,
+    phonetic: w.phonetic,
+    meaning: w.meaning,
+    example_sentence: w.example_sentence,
+    exam_requirement: w.exam_requirement,
+    type: w.type || 'new',
+    repeatCount: 0
+  }))
+
+  roundStats.known = 0
+  roundStats.vague = 0
+  roundStats.unknown = 0
+  showMeaning.value = false
+  allRoundsComplete.value = false
+
+  await saveCurrentSession()
+}
+
+async function markResult(result: string) {
+  if (!currentWord.value) return
+
+  const word = currentWord.value
+
+  // 调用后端记录学习结果
+  try {
+    await studyWord(word.wordId, result)
+  } catch {
+    // 本地回退
+  }
+
+  // 更新全局统计
+  wordStats.today++
+  if (result === '认识') {
+    wordStats.mastered++
+  }
+
+  // 更新轮次内队列
+  if (result === '认识') {
+    roundStats.known++
+    roundQueue.value.shift()
+    globalIndex.value++
+  } else if (result === '模糊') {
+    roundStats.vague++
+    if (word.repeatCount < 2) {
+      // 重新插入队尾，重复次数+1
+      const item = roundQueue.value.shift()
+      if (item) {
+        item.repeatCount++
+        roundQueue.value.push(item)
+      }
+    } else {
+      // 已达到最大重复次数，移出队列
+      roundQueue.value.shift()
+      globalIndex.value++
+    }
+  } else if (result === '不认识') {
+    roundStats.unknown++
+    // 重新插入队尾，持续重复
+    const item = roundQueue.value.shift()
+    if (item) {
+      item.repeatCount++
+      roundQueue.value.push(item)
+    }
+  }
+
+  showMeaning.value = false
+
+  // 保存进度
+  await saveCurrentSession()
+
+  // 检查本轮是否完成
+  if (roundQueue.value.length === 0) {
+    completedRounds.value++
+    roundCompleteVisible.value = true
+  }
+}
+
+async function startNextRound() {
+  roundCompleteVisible.value = false
+  startRound(currentRound.value + 1)
+}
+
+async function exitStudy() {
+  roundCompleteVisible.value = false
+  allRoundsComplete.value = true
+  roundQueue.value = []
+  await clearStudySession()
+  ElMessage.success('背诵已结束，进度已保存')
+}
+
+function restartToday() {
+  allRoundsComplete.value = false
+  loadTodayWords()
+}
+
+async function saveCurrentSession() {
+  if (totalWordsToday.value === 0) return
+  const session: StudySession = {
+    current_round: currentRound.value,
+    total_rounds: totalRounds.value,
+    round_queue: roundQueue.value,
+    round_stats: { known: roundStats.known, vague: roundStats.vague, unknown: roundStats.unknown },
+    global_index: globalIndex.value,
+    total_words_today: totalWordsToday.value,
+    study_mode: studyMode.value,
+    batch_size: batchSize.value,
+    all_word_ids: todayWords.value.map(w => w.id),
+    completed_rounds: completedRounds.value,
+    category: selectedCategory.value || null
+  }
+  try {
+    await saveStudySession(session)
+  } catch {
+    // 忽略保存错误
+  }
+}
+
+async function checkAndResumeSession() {
+  try {
+    const session = await getStudySession()
+    if (session && session.total_words_today > 0 && session.category === (selectedCategory.value || null)) {
+      savedSession.value = session
+      resumeVisible.value = true
+    }
+  } catch {
+    // 无保存的进度
+  }
+}
+
+async function resumeSession() {
+  resumeVisible.value = false
+  const session = savedSession.value
+  if (!session) return
+
+  // 恢复状态
+  currentRound.value = session.current_round
+  totalRounds.value = session.total_rounds
+  roundQueue.value = session.round_queue.map((item: any) => ({
+    wordId: item.wordId || item.word_id,
+    word: item.word,
+    phonetic: item.phonetic,
+    meaning: item.meaning,
+    example_sentence: item.example_sentence,
+    exam_requirement: item.exam_requirement,
+    type: item.type,
+    repeatCount: item.repeatCount || 0
+  }))
+  roundStats.known = session.round_stats.known
+  roundStats.vague = session.round_stats.vague
+  roundStats.unknown = session.round_stats.unknown
+  globalIndex.value = session.global_index
+  totalWordsToday.value = session.total_words_today
+  completedRounds.value = session.completed_rounds || 0
+  studyMode.value = session.study_mode
+  batchSize.value = session.batch_size
+  allRoundsComplete.value = false
+
+  // 需要重新加载 todayWords 以恢复单词数据
+  try {
+    const category = selectedCategory.value || undefined
+    const result: TodayWordsResponse = await getTodayWords(dailyCount.value, category)
+    todayWords.value = [...result.review, ...result.new]
+  } catch {
+    // 使用已有数据
+  }
+
+  ElMessage.success('已恢复背诵进度')
+}
+
+async function discardSession() {
+  resumeVisible.value = false
+  await clearStudySession()
+  await loadTodayWords()
 }
 
 async function loadReviewWords() {
   try {
     const result = await getReviewWordsByRange(reviewRange.value)
-    reviewWords.value = result.words
-    reviewIndex.value = 0
-    currentReviewWord.value = reviewWords.value[0] || null
-    showReviewMeaning.value = false
+    reviewWords.value = result.words.map(w => ({ ...w, type: 'review' }))
   } catch {
-    reviewWords.value = [
-      { id: 1, word: 'abandon', phonetic: '/əˈbændən/', meaning: 'v. 放弃，抛弃', example_sentence: 'He decided to abandon the project.', difficulty: 1, frequency: 95, exam_requirement: '高频词' },
-      { id: 2, word: 'ability', phonetic: '/əˈbɪləti/', meaning: 'n. 能力，才能', example_sentence: 'She has the ability to learn quickly.', difficulty: 1, frequency: 88, exam_requirement: '考纲词' },
-    ]
-    currentReviewWord.value = reviewWords.value[0]
+    reviewWords.value = []
   }
 }
 
@@ -400,51 +736,21 @@ async function loadWordList() {
   }
 }
 
-async function markResult(result: string) {
-  if (!currentWord.value) return
-  try {
-    await studyWord(currentWord.value.id, result)
-  } catch {
-    if (result === '认识') {
-      wordStats.mastered++
-    }
-  }
-  wordStats.today++
-  if (currentIndex.value < todayWords.value.length - 1) {
-    currentIndex.value++
-    currentWord.value = todayWords.value[currentIndex.value]
-    showMeaning.value = false
-  } else {
-    currentWord.value = null
-    ElMessage.success('今日单词学习完成！')
-  }
-}
-
-async function markReviewResult(result: string) {
-  if (!currentReviewWord.value) return
-  try {
-    await studyWord(currentReviewWord.value.id, result)
-  } catch {
-    if (result === '认识') {
-      wordStats.mastered++
-    }
-  }
-  if (reviewIndex.value < reviewWords.value.length - 1) {
-    reviewIndex.value++
-    currentReviewWord.value = reviewWords.value[reviewIndex.value]
-    showReviewMeaning.value = false
-  } else {
-    currentReviewWord.value = null
-    ElMessage.success('复习完成！')
-  }
-}
-
 onMounted(async () => {
-  await loadStats()
   await loadPlan()
+  await loadStats(selectedCategory.value || undefined)
   await loadCategories()
-  await loadTodayWords()
   await loadWordList()
+  await checkAndResumeSession()
+  if (!resumeVisible.value) {
+    await loadTodayWords()
+  }
+})
+
+watch(dailyCount, (newVal) => {
+  if (batchSize.value > newVal) {
+    batchSize.value = newVal
+  }
 })
 
 watch(subTab, async (newTab) => {
@@ -539,6 +845,21 @@ async function handleWordbookSelect(event: Event) {
   padding: 16px;
   border-radius: 8px;
   margin-bottom: 20px;
+}
+
+.round-progress-bar {
+  background: #f0f9ff;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.progress-info {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 16px;
 }
 
 .word-card {
@@ -659,5 +980,53 @@ async function handleWordbookSelect(event: Event) {
 
 .hidden-input {
   display: none;
+}
+
+.round-stats {
+  text-align: center;
+}
+
+.round-stats-title {
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+
+.round-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.round-stat-item {
+  padding: 16px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.round-stat-item.success {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.round-stat-item.warning {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.round-stat-item.danger {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.round-stat-item .stat-num {
+  display: block;
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.round-stat-item .stat-label {
+  font-size: 14px;
+  margin-top: 4px;
 }
 </style>

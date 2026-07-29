@@ -64,6 +64,11 @@ class RecommendationService:
     
     async def generate_recommendations(self, db: Session, user_id: int, count: int = 5, subject: str = None, progress_callback=None) -> list:
         from ..services.ai_service import ai_service
+        from ..agents.base import agent_registry
+        
+        # 检查智能出题智能体是否启用
+        if not agent_registry.is_agent_enabled('recommendation_agent'):
+            raise ValueError("智能出题功能已被停用。请前往首页，在「智能体状态」中开启「智能出题助手」。")
         
         user_config = ai_service._get_user_ai_config(db, user_id)
         
@@ -89,7 +94,7 @@ class RecommendationService:
         recommendations = []
         
         try:
-            ai_recommendations = await self._generate_ai_recommendations(db, user_id, weak_points, count, subject, progress_callback=progress_callback)
+            ai_recommendations = await self._generate_ai_recommendations(db, user_id, filtered_weak_points, count, subject, progress_callback=progress_callback)
             recommendations.extend(ai_recommendations)
         except ValueError as ve:
             raise ve
@@ -148,10 +153,12 @@ class RecommendationService:
         filtered_weak_points = weak_points
         if subject:
             filtered_weak_points = [wp for wp in weak_points if wp["subject"] == subject]
-        
+
+        filtered_weak_points = [wp for wp in filtered_weak_points if wp.get("knowledge_point") and wp["knowledge_point"].strip() not in ("", "未分类")]
+
         if not filtered_weak_points:
             if subject:
-                raise ValueError(f"科目「{subject}」暂无薄弱知识点，请先添加该科目的错题")
+                raise ValueError(f"科目「{subject}」暂无明确薄弱知识点，请先添加该科目的错题")
             else:
                 raise ValueError("暂无薄弱知识点，请先添加错题")
         
@@ -180,31 +187,36 @@ class RecommendationService:
                 
                 try:
                     search_query = f"{wp_subject} {knowledge_point} 考研题目"
-                    rag_result = rag_service.chat(user_id, search_query, top_k=3, threshold=0.3, ai_config=user_config)
-                    
+                    rag_result = rag_service.chat(user_id, search_query, top_k=3, threshold=0.3, ai_config=user_config, subject=wp_subject)
+
                     context = ""
                     for chunk in rag_result.get("relevant_chunks", []):
+                        chunk_subject = chunk['metadata'].get('subject', '未分类')
+                        if chunk_subject != wp_subject and chunk_subject != "全部":
+                            continue
                         context += f"【来源：{chunk['metadata'].get('filename', '未知文档')}】\n"
                         context += f"{chunk['content']}\n\n"
                 except Exception:
                     context = ""
-                
+
                 expert_role = subject_prompts.get(wp_subject, f"考研{wp_subject}出题专家")
+                subject_restriction = f"\n【绝对禁止】你绝对不能生成{wp_subject}以外的任何科目的题目。即使你看到参考内容是其他科目的，也必须只出{wp_subject}题。"
                 math_formula_note = "\n2. 数学公式必须使用标准LaTeX格式（行内$...$，块级$$...$$）" if wp_subject == "数学" else ""
-                
-                system_prompt = f"你是一个专业的{expert_role}，擅长根据知识点生成高质量的考研练习题。"
-                
+
+                system_prompt = f"你是一个专业的{expert_role}，擅长根据知识点生成高质量的考研练习题。你严格遵守科目边界，绝不跨科目出题。"
+
                 user_prompt = f"""请生成一道关于【{wp_subject} - {knowledge_point}】的考研练习题。
 
 知识库参考内容：
 {context if context else "（暂无知识库内容，请根据你的专业知识出题）"}
 
 要求：
-1. 题目必须是具体的{wp_subject}题目，难度适中，符合考研真题水平
-2. 必须包含完整的题目、答案和解析，所有字段内容不能为空或空字符串
-3. difficulty字段只能是"简单"、"中等"或"困难"三者之一
-4. question_text至少10个字，answer至少2个字，analysis至少10个字
-5. 数学公式必须使用标准LaTeX格式（行内$...$，块级$$...$$）
+1. 题目必须是严格的{wp_subject}科目题目，难度适中，符合考研真题水平
+2. 绝对禁止生成{wp_subject}以外的任何科目题目（如数学、英语、政治等），即使参考内容涉及其他科目{subject_restriction}
+3. 必须包含完整的题目、答案和解析，所有字段内容不能为空或空字符串
+4. difficulty字段只能是"简单"、"中等"或"困难"三者之一
+5. question_text至少10个字，answer至少2个字，analysis至少10个字
+6. 数学公式必须使用标准LaTeX格式（行内$...$，块级$$...$$）
 
 只输出JSON，不要任何其他文字！"""
                 
@@ -261,10 +273,12 @@ class RecommendationService:
         
         return recommendations
     
-    def get_recommendations(self, db: Session, user_id: int, completed: bool = False) -> list:
+    def get_recommendations(self, db: Session, user_id: int, completed: bool = False, subject: str = None) -> list:
         query = db.query(Recommendation).filter(Recommendation.user_id == user_id)
         if completed is not None:
             query = query.filter(Recommendation.completed == completed)
+        if subject:
+            query = query.filter(Recommendation.subject == subject)
         
         recommendations = query.order_by(Recommendation.created_at.desc()).all()
         return [self._to_dict(rec) for rec in recommendations]

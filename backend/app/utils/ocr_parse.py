@@ -1,15 +1,40 @@
 import os
 import re
 from typing import Optional
-from rapidocr_onnxruntime import RapidOCR
-from PyPDF2 import PdfReader
-from docx import Document
-import fitz
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    _HAS_RAPIDOCR = True
+except ImportError:
+    _HAS_RAPIDOCR = False
+
+try:
+    from PyPDF2 import PdfReader
+    _HAS_PYPDF2 = True
+except ImportError:
+    _HAS_PYPDF2 = False
+
+try:
+    from docx import Document
+    _HAS_DOCX = True
+except ImportError:
+    _HAS_DOCX = False
+
+try:
+    import fitz
+    _HAS_FITZ = True
+except ImportError:
+    _HAS_FITZ = False
 
 
 class OCRParser:
     def __init__(self):
-        self.ocr_engine = RapidOCR()
+        self.ocr_engine = None
+        if _HAS_RAPIDOCR:
+            try:
+                self.ocr_engine = RapidOCR()
+            except Exception:
+                pass
 
     def parse_file(self, file_path: str, progress_callback=None) -> str:
         file_ext = os.path.splitext(file_path)[1].lower()
@@ -36,27 +61,28 @@ class OCRParser:
             
             pymupdf_text = text
             
-            reader = PdfReader(file_path)
-            total_pages = len(reader.pages)
-            pypdf_text = ""
-            has_text = False
-            
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text()
-                if page_text and page_text.strip():
-                    has_text = True
-                    pypdf_text += page_text + "\n\n"
+            if _HAS_PYPDF2:
+                reader = PdfReader(file_path)
+                total_pages = len(reader.pages)
+                pypdf_text = ""
+                has_text = False
                 
-                if progress_callback and total_pages > 0:
-                    page_progress = int(5 + (i + 1) / total_pages * 15)
-                    if page_progress % 5 == 0 or i == total_pages - 1:
-                        progress_callback(page_progress, f"正在解析第 {i + 1}/{total_pages} 页...")
-            
-            if has_text and len(pypdf_text.strip()) > 100:
-                pypdf_chinese = sum(1 for c in pypdf_text if '\u4e00' <= c <= '\u9fff')
-                if pymupdf_text and pypdf_chinese < chinese_count * 0.5:
-                    return self._clean_text(pymupdf_text)
-                return self._clean_text(pypdf_text)
+                for i, page in enumerate(reader.pages):
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        has_text = True
+                        pypdf_text += page_text + "\n\n"
+                    
+                    if progress_callback and total_pages > 0:
+                        page_progress = int(5 + (i + 1) / total_pages * 15)
+                        if page_progress % 5 == 0 or i == total_pages - 1:
+                            progress_callback(page_progress, f"正在解析第 {i + 1}/{total_pages} 页...")
+                
+                if has_text and len(pypdf_text.strip()) > 100:
+                    pypdf_chinese = sum(1 for c in pypdf_text if '\u4e00' <= c <= '\u9fff')
+                    if pymupdf_text and pypdf_chinese < chinese_count * 0.5:
+                        return self._clean_text(pymupdf_text)
+                    return self._clean_text(pypdf_text)
             
             if pymupdf_text and len(pymupdf_text.strip()) > 100:
                 return self._clean_text(pymupdf_text)
@@ -71,6 +97,8 @@ class OCRParser:
             return self._parse_scanned_pdf(file_path, progress_callback)
 
     def _parse_pdf_with_fitz(self, file_path: str, progress_callback=None) -> str:
+        if not _HAS_FITZ:
+            return ""
         try:
             doc = fitz.open(file_path)
             total_pages = len(doc)
@@ -92,19 +120,22 @@ class OCRParser:
             return ""
 
     def _parse_scanned_pdf(self, file_path: str, progress_callback=None) -> str:
+        if not _HAS_FITZ:
+            return ""
+        if not self.ocr_engine:
+            return ""
         text = ""
         try:
             doc = fitz.open(file_path)
             total_pages = len(doc)
             
             for page_num, page in enumerate(doc):
-                pix = page.get_pixmap()
-                temp_image = f"temp_page_{page_num}.png"
-                pix.save(temp_image)
-                page_text = self._parse_image(temp_image)
-                text += page_text + "\n\n"
-                if os.path.exists(temp_image):
-                    os.remove(temp_image)
+                pix = page.get_pixmap(matrix=fitz.Matrix(0.7, 0.7))
+                img_bytes = pix.tobytes("png")
+                
+                page_text = self._parse_image_bytes(img_bytes)
+                if page_text and len(page_text.strip()) > 10:
+                    text += page_text + "\n\n"
                 
                 if progress_callback:
                     ocr_progress = int(10 + (page_num + 1) / total_pages * 10)
@@ -115,28 +146,55 @@ class OCRParser:
             return ""
 
     def _parse_image(self, file_path: str) -> str:
+        if not self.ocr_engine:
+            return ""
         try:
             result, _ = self.ocr_engine(file_path)
             if not result:
                 return ""
             
-            filtered_results = []
-            for item in result:
-                if len(item) >= 3 and item[2] > 0.55:
-                    filtered_results.append(item)
-            
-            filtered_results.sort(key=lambda x: (x[0][0][1], x[0][0][0]))
-            
-            texts = []
-            for item in filtered_results:
-                texts.append(item[1])
-            
-            raw_text = "\n".join(texts)
-            return self._clean_text(raw_text)
+            return self._process_ocr_result(result)
         except Exception:
             return ""
 
+    def _parse_image_bytes(self, img_bytes: bytes) -> str:
+        if not self.ocr_engine:
+            return ""
+        try:
+            import numpy as np
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(img_bytes))
+            img_np = np.array(img)
+            result, _ = self.ocr_engine(img_np)
+            if not result:
+                return ""
+            
+            return self._process_ocr_result(result)
+        except Exception:
+            return ""
+
+    def _process_ocr_result(self, result) -> str:
+        if not result:
+            return ""
+        
+        filtered_results = []
+        for item in result:
+            if len(item) >= 3 and item[2] > 0.55:
+                filtered_results.append(item)
+        
+        filtered_results.sort(key=lambda x: (x[0][0][1], x[0][0][0]))
+        
+        texts = []
+        for item in filtered_results:
+            texts.append(item[1])
+        
+        raw_text = "\n".join(texts)
+        return self._clean_text(raw_text)
+
     def _parse_docx(self, file_path: str) -> str:
+        if not _HAS_DOCX:
+            return ""
         try:
             doc = Document(file_path)
             text = ""

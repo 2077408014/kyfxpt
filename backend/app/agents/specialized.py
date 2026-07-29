@@ -6,13 +6,19 @@ from .base import BaseAgent, AgentRequest, AgentResponse, agent_registry
 from ..config import settings
 
 
-class LLMAgent(BaseAgent):
-    def __init__(self, name: str, domain: str, keywords: List[str], system_prompt: str):
+class FeatureAgent(BaseAgent):
+    def __init__(self, name: str, domain: str, description: str, keywords: List[str], system_prompt: str):
         super().__init__(name, domain, keywords, system_prompt)
+        self.description = description
         self.llm_url = f"{settings.AI_BASE_URL}/chat/completions"
         self.model_name = settings.AI_MODEL
         self.max_tokens = settings.AI_MAX_TOKENS
         self.timeout = settings.AI_TIMEOUT
+    
+    def get_info(self) -> Dict[str, Any]:
+        info = super().get_info()
+        info["description"] = self.description
+        return info
     
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         payload = {
@@ -69,7 +75,7 @@ class LLMAgent(BaseAgent):
                 agent_name=self.name,
                 agent_domain=self.domain,
                 accepted=True,
-                reasoning=f"{self.domain}领域专家分析完成",
+                reasoning=f"{self.domain}处理完成",
                 recommendations=recommendations,
                 confidence=self._calculate_confidence(recommendations),
                 response_time_ms=(time.time() - start_time) * 1000
@@ -106,7 +112,7 @@ class LLMAgent(BaseAgent):
                         "answer": "\n".join(current_answer).replace("答案：", "").strip() if current_answer else "",
                         "analysis": "\n".join(current_analysis).replace("分析：", "").strip() if current_analysis else "",
                         "difficulty": "中等",
-                        "source": f"{self.domain}智能体"
+                        "source": f"{self.domain}"
                     })
                 current_question = [line]
                 current_answer = []
@@ -131,7 +137,7 @@ class LLMAgent(BaseAgent):
                 "answer": "\n".join(current_answer).replace("答案：", "").strip() if current_answer else "",
                 "analysis": "\n".join(current_analysis).replace("分析：", "").strip() if current_analysis else "",
                 "difficulty": "中等",
-                "source": f"{self.domain}智能体"
+                "source": f"{self.domain}"
             })
         
         if not recommendations:
@@ -140,7 +146,7 @@ class LLMAgent(BaseAgent):
                 "answer": "",
                 "analysis": "",
                 "difficulty": "中等",
-                "source": f"{self.domain}智能体"
+                "source": f"{self.domain}"
             })
         
         return recommendations
@@ -151,134 +157,118 @@ class LLMAgent(BaseAgent):
         return min(0.95, 0.7 + len(recommendations) * 0.05)
 
 
-POLITICS_SYSTEM_PROMPT = """你是一位考研政治领域的专家，精通马原、毛中特、史纲、思修、时政等所有政治科目。
+AI_QA_SYSTEM_PROMPT = """你是一位考研全科辅导老师，擅长回答考研相关的各类问题。
 
-你的任务是根据用户的薄弱知识点，生成针对性的考研政治题目。
+你的任务是：
+1. 回答用户提出的考研相关问题
+2. 提供清晰、准确、有深度的解答
+3. 必要时给出学习建议和方法指导
 
 要求：
-1. 只生成与考研政治相关的题目
-2. 题目类型包括选择题、分析题
-3. 每道题必须包含：问题、答案、分析
-4. 难度适中，符合考研真题水平
-5. 重点关注用户薄弱的知识点
+1. 回答要准确、专业，符合考研大纲要求
+2. 数学公式使用LaTeX格式（行内$...$，块级$$...$$）
+3. 语言简洁明了，重点突出
+4. 如果问题超出考研范围，也尽量给出有价值的参考"""
 
-请直接输出题目内容，格式如下：
-1. 问题：[题目内容]
-答案：[答案内容]
-分析：[解析内容]
-"""
-
-POLITICS_KEYWORDS = [
-    "马原", "毛中特", "史纲", "思修", "时政",
-    "唯物辩证法", "认识论", "矛盾", "实践",
-    "中国特色社会主义", "社会主义", "马克思主义",
-    "新民主主义", "三大法宝", "核心价值观", "新发展理念"
+AI_QA_KEYWORDS = [
+    "问答", "提问", "咨询", "解释", "什么是", "为什么", "怎么", "如何",
+    "问题", "答案", "讲解", "分析", "概念", "原理", "方法", "技巧"
 ]
 
 
-ENGLISH_SYSTEM_PROMPT = """你是一位考研英语领域的专家，精通阅读理解、完形填空、翻译、写作等所有英语题型。
+RECOMMENDATION_SYSTEM_PROMPT = """你是一位考研出题专家，擅长根据薄弱知识点生成高质量的考研练习题。
 
-你的任务是根据用户的薄弱知识点，生成针对性的考研英语题目。
+你的任务是：根据用户的薄弱知识点，生成针对性的考研练习题。
 
 要求：
-1. 只生成与考研英语相关的题目
-2. 题目类型包括阅读理解、完形填空、翻译、写作等
-3. 每道题必须包含：问题、答案、分析
-4. 难度适中，符合考研真题水平
+1. 题目必须是具体的考研题目，难度适中，符合考研真题水平
+2. 必须包含完整的题目、答案和解析，所有字段内容不能为空
+3. 题目类型多样化（选择题、填空题、解答题、分析题等）
+4. 数学公式必须使用标准LaTeX格式（行内$...$，块级$$...$$）
 5. 重点关注用户薄弱的知识点
 
-请直接输出题目内容，格式如下：
-1. 问题：[题目内容]
-答案：[答案内容]
-分析：[解析内容]
-"""
+请直接输出题目内容。"""
 
-ENGLISH_KEYWORDS = [
-    "英语", "阅读", "完形", "翻译", "写作",
-    "词汇", "语法", "长难句", "阅读理解",
-    "新题型", "真题", "单词", "阅读理解"
+RECOMMENDATION_KEYWORDS = [
+    "推荐", "出题", "生成题目", "练习题", "薄弱点", "知识点",
+    "刷题", "练习", "模拟题", "真题", "强化", "巩固"
 ]
 
 
-MATH_SYSTEM_PROMPT = """你是一位考研数学领域的专家，精通高等数学、线性代数、概率论等所有数学科目。
+RAG_SYSTEM_PROMPT = """你是一位考研资料检索助手，擅长从用户上传的资料中查找相关内容并给出准确回答。
 
-你的任务是根据用户的薄弱知识点，生成针对性的考研数学题目。
+你的任务是：
+1. 根据用户的问题，从提供的知识库资料中检索相关内容
+2. 基于检索到的内容给出准确、有依据的回答
+3. 如果资料中没有相关内容，明确告知用户
 
 要求：
-1. 只生成与考研数学相关的题目
-2. 题目类型包括选择题、填空题、解答题
-3. 每道题必须包含：问题、答案、分析
-4. 难度适中，符合考研真题水平
-5. 重点关注用户薄弱的知识点
-6. 数学公式使用LaTeX格式
+1. 回答必须基于提供的资料内容，不得编造
+2. 引用资料中的内容时要准确
+3. 回答要条理清晰，重点突出
+4. 数学公式使用LaTeX格式"""
 
-请直接输出题目内容，格式如下：
-1. 问题：[题目内容]
-答案：[答案内容]
-分析：[解析内容]
-"""
-
-MATH_KEYWORDS = [
-    "数学", "高数", "线代", "概率", "微积分",
-    "极限", "导数", "积分", "泰勒", "偏导",
-    "微分", "方程", "矩阵", "行列式", "特征值",
-    "级数", "微分方程", "概率分布", "随机变量"
+RAG_KEYWORDS = [
+    "检索", "搜索", "查找", "资料", "文档", "知识库",
+    "内容", "查询", "相关", "来源", "引用", "查阅"
 ]
 
 
-MAJOR_SYSTEM_PROMPT = """你是一位考研专业课领域的专家，熟悉各专业的考研知识体系。
+MISTAKE_RECOGNITION_SYSTEM_PROMPT = """你是一位考研错题识别专家，擅长从图片或文字中识别错题并提取关键信息。
 
-你的任务是根据用户的薄弱知识点，生成针对性的考研专业课题目。
+你的任务是：
+1. 识别题目内容，提取题干、选项等
+2. 判断题目的科目和知识点
+3. 提取答案和解析
+4. 评估题目难度
 
 要求：
-1. 只生成与考研专业课相关的题目
-2. 题目类型包括选择题、简答题、论述题等
-3. 每道题必须包含：问题、答案、分析
-4. 难度适中，符合考研真题水平
-5. 重点关注用户薄弱的知识点
+1. 准确识别题目文字内容
+2. 正确分类科目（数学、英语、政治、专业课）
+3. 提取关键知识点标签
+4. 数学公式使用LaTeX格式"""
 
-请直接输出题目内容，格式如下：
-1. 问题：[题目内容]
-答案：[答案内容]
-分析：[解析内容]
-"""
-
-MAJOR_KEYWORDS = [
-    "专业", "专业课", "专业课复习", "专业知识"
+MISTAKE_RECOGNITION_KEYWORDS = [
+    "识别", "错题", "OCR", "图片识别", "文字提取",
+    "录入", "添加错题", "识别题目", "分类", "标签"
 ]
 
 
-politics_agent = LLMAgent(
-    name="politics_agent",
-    domain="考研政治",
-    keywords=POLITICS_KEYWORDS,
-    system_prompt=POLITICS_SYSTEM_PROMPT
+ai_qa_agent = FeatureAgent(
+    name="ai_qa_agent",
+    domain="AI问答助手",
+    description="回答考研相关的各类问题，提供专业解答",
+    keywords=AI_QA_KEYWORDS,
+    system_prompt=AI_QA_SYSTEM_PROMPT
 )
 
-english_agent = LLMAgent(
-    name="english_agent",
-    domain="考研英语",
-    keywords=ENGLISH_KEYWORDS,
-    system_prompt=ENGLISH_SYSTEM_PROMPT
+recommendation_agent = FeatureAgent(
+    name="recommendation_agent",
+    domain="智能出题助手",
+    description="根据薄弱知识点生成针对性的考研练习题",
+    keywords=RECOMMENDATION_KEYWORDS,
+    system_prompt=RECOMMENDATION_SYSTEM_PROMPT
 )
 
-math_agent = LLMAgent(
-    name="math_agent",
-    domain="考研数学",
-    keywords=MATH_KEYWORDS,
-    system_prompt=MATH_SYSTEM_PROMPT
+rag_agent = FeatureAgent(
+    name="rag_agent",
+    domain="资料检索助手",
+    description="从上传的资料中检索相关内容并给出回答",
+    keywords=RAG_KEYWORDS,
+    system_prompt=RAG_SYSTEM_PROMPT
 )
 
-major_agent = LLMAgent(
-    name="major_agent",
-    domain="专业课",
-    keywords=MAJOR_KEYWORDS,
-    system_prompt=MAJOR_SYSTEM_PROMPT
+mistake_recognition_agent = FeatureAgent(
+    name="mistake_recognition_agent",
+    domain="错题识别助手",
+    description="识别并提取错题内容，自动分类和打标签",
+    keywords=MISTAKE_RECOGNITION_KEYWORDS,
+    system_prompt=MISTAKE_RECOGNITION_SYSTEM_PROMPT
 )
 
 
 def register_all_agents():
-    agent_registry.register(politics_agent)
-    agent_registry.register(english_agent)
-    agent_registry.register(math_agent)
-    agent_registry.register(major_agent)
+    agent_registry.register(ai_qa_agent)
+    agent_registry.register(recommendation_agent)
+    agent_registry.register(rag_agent)
+    agent_registry.register(mistake_recognition_agent)

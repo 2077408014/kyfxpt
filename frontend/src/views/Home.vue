@@ -71,6 +71,43 @@
         </el-button>
       </div>
     </div>
+
+    <div class="agent-section">
+      <div class="section-header">
+        <h3>智能体状态</h3>
+        <el-tag v-if="agents.length > 0" type="info" effect="plain">
+          {{ agents.filter(a => a.enabled).length }} / {{ agents.length }} 启用中
+        </el-tag>
+      </div>
+      <div v-if="agents.length > 0" class="agents-grid">
+        <el-card
+          v-for="agent in agents"
+          :key="agent.name"
+          class="agent-card"
+          :class="{ 'agent-disabled': !agent.enabled }"
+        >
+          <div class="agent-header">
+            <div class="agent-info">
+              <div class="agent-name">{{ agent.domain }}</div>
+              <div class="agent-desc">{{ agent.description }}</div>
+            </div>
+            <el-switch
+              v-model="agent.enabled"
+              @change="handleToggleAgent(agent.name, agent.enabled)"
+              :disabled="agentLoading"
+            />
+          </div>
+          <div class="agent-keywords">
+            <el-tag v-for="kw in agent.keywords.slice(0, 3)" :key="kw" size="small" type="info" effect="plain">{{ kw }}</el-tag>
+            <span v-if="agent.keywords.length > 3" class="more-keywords">+{{ agent.keywords.length - 3 }}</span>
+          </div>
+        </el-card>
+      </div>
+      <div v-else class="empty-tip">
+        <el-icon><InfoFilled /></el-icon>暂无智能体信息
+      </div>
+    </div>
+
     <div class="overview-section">
       <div class="overview-card">
         <h3>本周学习趋势</h3>
@@ -97,10 +134,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
-import { DocumentDelete, Clock, Reading, FolderOpened, Plus, Refresh, Notebook, Message, Document, Warning, DataAnalysis } from '@element-plus/icons-vue'
+import { DocumentDelete, Clock, Reading, FolderOpened, Plus, Refresh, Notebook, Message, Document, Warning, DataAnalysis, InfoFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { getMistakes } from '../api/mistakes'
 import { getResources } from '../api/resources'
 import { getWeeklyTrend, getStudyReport, type DailyStats, type StudyReport } from '../api/report'
+import { getAgentStatus, toggleAgent, type AgentInfo } from '../api/recommendation'
 
 const period = ref('week')
 const report = ref<StudyReport>({
@@ -116,6 +155,8 @@ const recentMistakes = ref<any[]>([])
 const trendChart = ref<HTMLElement | null>(null)
 const subjectChart = ref<HTMLElement | null>(null)
 const weeklyTrend = ref<DailyStats[]>([])
+const agents = ref<AgentInfo[]>([])
+const agentLoading = ref(false)
 
 const mistakeBySubject = computed(() => {
   return report.value.mistake_stats.by_subject
@@ -137,12 +178,38 @@ async function loadReport() {
   }
 }
 
+async function loadAgents() {
+  try {
+    const agentData = await getAgentStatus()
+    agents.value = agentData.agents
+  } catch {
+    agents.value = []
+  }
+}
+
+async function handleToggleAgent(agentName: string, enabled: boolean) {
+  agentLoading.value = true
+  try {
+    const result = await toggleAgent(agentName, enabled)
+    ElMessage.success(result.message)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '操作失败')
+    const idx = agents.value.findIndex(a => a.name === agentName)
+    if (idx !== -1) {
+      agents.value[idx].enabled = !enabled
+    }
+  } finally {
+    agentLoading.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const mistakes = await getMistakes()
     recentMistakes.value = mistakes.slice(0, 5)
 
     await loadReport()
+    await loadAgents()
   } catch {
     // ignore
   }
@@ -562,6 +629,79 @@ function renderSubjectChart() {
   text-align: center;
   color: #909399;
   padding: 20px;
+}
+
+.agent-section {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.agent-card {
+  padding: 16px;
+  transition: all 0.3s;
+}
+
+.agent-card.agent-disabled {
+  opacity: 0.6;
+  background: #f5f5f5;
+}
+
+.agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.agent-info {
+  flex: 1;
+}
+
+.agent-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.agent-desc {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+}
+
+.agent-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.more-keywords {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
 }
 
 @media (max-width: 1200px) {

@@ -3,7 +3,7 @@
     <div class="page-header">
       <h2>资料管理</h2>
       <div class="header-actions">
-        <el-button type="primary" @click="triggerUpload">
+        <el-button type="primary" @click="triggerUpload" v-if="activeTab === 'files'">
           <el-icon><Plus /></el-icon>上传资料
         </el-button>
         <input
@@ -16,187 +16,95 @@
       </div>
     </div>
 
-    <div v-if="knowledgeStatus" class="status-card">
-      <div class="status-item">
-        <el-icon><DataLine /></el-icon>
-        <div class="status-info">
-          <div class="status-value">{{ knowledgeStatus.document_count }}</div>
-          <div class="status-label">文档数量</div>
+    <el-tabs v-model="activeTab" class="resources-tabs">
+      <el-tab-pane label="📁 文件管理" name="files">
+        <div v-if="knowledgeStatus" class="status-card">
+          <div class="status-item">
+            <el-icon><DataLine /></el-icon>
+            <div class="status-info">
+              <div class="status-value">{{ knowledgeStatus.document_count }}</div>
+              <div class="status-label">文档数量</div>
+            </div>
+          </div>
+          <div class="status-item">
+            <el-icon><FolderOpened /></el-icon>
+            <div class="status-info">
+              <div class="status-value">{{ knowledgeStatus.total_chunks }}</div>
+              <div class="status-label">索引块数</div>
+            </div>
+          </div>
+          <div class="status-item">
+            <el-icon><Connection /></el-icon>
+            <div class="status-info">
+              <div class="status-value">{{ knowledgeStatus.index_size || 0 }}</div>
+              <div class="status-label">向量索引</div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="status-item">
-        <el-icon><FolderOpened /></el-icon>
-        <div class="status-info">
-          <div class="status-value">{{ knowledgeStatus.total_chunks }}</div>
-          <div class="status-label">索引块数</div>
-        </div>
-      </div>
-      <div class="status-item">
-        <el-icon><Connection /></el-icon>
-        <div class="status-info">
-          <div class="status-value">{{ knowledgeStatus.index_size || 0 }}</div>
-          <div class="status-label">向量索引</div>
-        </div>
-      </div>
-    </div>
 
-    <div class="filter-bar">
-      <span class="filter-label">学科筛选：</span>
-      <el-select v-model="filterSubject" placeholder="全部学科" clearable @change="loadResources" class="subject-filter">
-        <el-option label="全部" value="" />
-        <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
-      </el-select>
-    </div>
-
-    <div class="search-bar">
-      <el-input
-        v-model="searchQuery"
-        placeholder="搜索文件名..."
-        clearable
-        @keyup.enter="handleSearch"
-        class="search-input"
-      >
-        <template #prefix>
-          <el-icon><Search /></el-icon>
-        </template>
-      </el-input>
-      <el-button @click="handleSearch">搜索文件</el-button>
-      <el-input
-        v-model="knowledgeSearchQuery"
-        placeholder="搜索知识点..."
-        clearable
-        @keyup.enter="handleKnowledgeSearch"
-        class="search-input"
-      >
-        <template #prefix>
-          <el-icon><Search /></el-icon>
-        </template>
-      </el-input>
-      <el-select v-model="knowledgeSearchSubject" placeholder="全部学科" clearable class="subject-filter">
-        <el-option label="全部学科" value="" />
-        <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
-      </el-select>
-      <el-button type="primary" @click="handleKnowledgeSearch" :loading="knowledgeSearchLoading">
-        <el-icon v-if="!knowledgeSearchLoading"><Search /></el-icon>
-        {{ knowledgeSearchLoading ? '搜索中...' : '搜索知识点' }}
-      </el-button>
-    </div>
-
-    <div v-if="knowledgeSearchLoading" class="search-progress-container">
-      <div class="search-progress">
-        <el-progress
-          :percentage="knowledgeSearchProgress"
-          :status="knowledgeSearchProgress >= 100 ? 'success' : undefined"
-          :stroke-width="12"
-          :text-inside="true"
-        >
-          <template #default="{ percentage }">
-            <span class="progress-text">{{ percentage }}%</span>
-          </template>
-        </el-progress>
-        <div class="progress-message">{{ knowledgeSearchProgressMessage }}</div>
-      </div>
-    </div>
-
-    <div v-if="showKnowledgeSearchResult" class="knowledge-search-results">
-      <h3>知识点搜索结果</h3>
-      
-      <el-card class="ai-answer-card">
-        <div class="ai-answer-header">
-          <span class="ai-icon">🤖</span>
-          <span class="ai-label">AI回答</span>
-          <el-tag v-if="knowledgeSearchSource" type="info" size="small" class="source-tag">来源: {{ knowledgeSearchSource }}</el-tag>
-        </div>
-        <div v-if="knowledgeSearchLoading" class="ai-loading">
-          <el-spinner />
-          <span>AI正在思考中...</span>
-        </div>
-        <div v-else class="ai-answer-content" v-html="renderMarkdown(knowledgeSearchAnswer)"></div>
-      </el-card>
-
-      <div v-if="knowledgeSearchSources.length > 0" class="knowledge-sources-section">
-        <div class="sources-header">
-          <h4>📚 检索到的原始资料片段 ({{ knowledgeSearchSources.length }}条)</h4>
-          <el-button size="small" @click="showAllSources = !showAllSources">
-            {{ showAllSources ? '收起全部' : '展开全部' }}
-          </el-button>
-        </div>
-        <div class="knowledge-results-list">
-          <el-card
-            v-for="(item, index) in displayedSources"
-            :key="index"
-            class="knowledge-result-card"
+        <div class="filter-bar">
+          <span class="filter-label">学科筛选：</span>
+          <el-select v-model="filterSubject" placeholder="全部学科" clearable @change="loadResources" class="subject-filter">
+            <el-option label="全部" value="" />
+            <el-option v-for="s in SUBJECTS" :key="s" :label="s" :value="s" />
+          </el-select>
+          <el-input
+            v-model="searchQuery"
+            placeholder="搜索文件名..."
+            clearable
+            @keyup.enter="handleSearch"
+            class="search-input"
           >
-            <div class="result-header">
-              <div class="knowledge-score" :style="{ background: getScoreGradient(item.similarity) }">
-                相似度 {{ (item.similarity * 100).toFixed(1) }}%
-              </div>
-              <div class="result-meta">
-                <el-tag size="small">{{ item.subject || '未分类' }}</el-tag>
-                <span class="chunk-info">分块 {{ item.chunkIndex || (index + 1) }}/{{ item.totalChunks || '-' }}</span>
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-button @click="handleSearch">搜索</el-button>
+        </div>
+
+        <div v-if="resources.length > 0" class="resources-grid">
+          <el-card
+            v-for="resource in resources"
+            :key="resource.id"
+            class="resource-card"
+            @click="openDocument(resource)"
+          >
+            <div class="resource-icon">
+              {{ getFileIcon(resource.file_type) }}
+            </div>
+            <div class="resource-info">
+              <div class="resource-name">{{ resource.filename }}</div>
+              <div class="resource-meta">
+                <span class="subject-tag">{{ resource.subject || '未分类' }}</span>
+                <span>{{ getFileSize(resource.file_size) }}</span>
+                <span>{{ formatDate(resource.created_at) }}</span>
+                <span v-if="resource.indexed_at" class="indexed-badge">已索引</span>
               </div>
             </div>
-            <div class="knowledge-content">
-              <div class="knowledge-filename">📄 {{ item.filename }}</div>
-              <div class="knowledge-text" :class="{ collapsed: !isSourceExpanded(index) }">
-                {{ item.content }}
-              </div>
-              <el-button 
-                v-if="item.content && item.content.length > 100" 
-                type="primary" 
-                link 
-                size="small"
-                @click="toggleSourceExpand(index)"
-              >
-                {{ isSourceExpanded(index) ? '收起' : '查看完整内容' }}
+            <div class="resource-actions">
+              <el-button type="text" size="small" @click.stop="openDocument(resource)" title="打开">
+                <el-icon><View /></el-icon>
+              </el-button>
+              <el-button type="text" size="small" @click.stop="openResourceDetail(resource)" title="详情">
+                <el-icon><InfoFilled /></el-icon>
+              </el-button>
+              <el-button type="text" size="small" @click.stop="handleDelete(resource.id)" title="删除">
+                <el-icon><Delete /></el-icon>
               </el-button>
             </div>
           </el-card>
         </div>
-      </div>
-
-      <div v-if="!knowledgeSearchLoading && knowledgeSearchSources.length === 0 && !knowledgeSearchAnswer" class="empty-tip">
-        <el-icon><Search /></el-icon>未从您的资料中找到相关内容，请尝试其他关键词或上传更多资料
-      </div>
-
-      <el-button @click="closeKnowledgeSearch">返回文件列表</el-button>
-    </div>
-
-    <div v-else-if="resources.length > 0" class="resources-grid">
-      <el-card
-        v-for="resource in resources"
-        :key="resource.id"
-        class="resource-card"
-        @click="openDocument(resource)"
-      >
-        <div class="resource-icon">
-          {{ getFileIcon(resource.file_type) }}
+        <div v-if="resources.length === 0" class="empty-tip">
+          <el-icon><FolderOpened /></el-icon>暂无资料，点击上方按钮上传
         </div>
-        <div class="resource-info">
-          <div class="resource-name">{{ resource.filename }}</div>
-          <div class="resource-meta">
-            <span class="subject-tag">{{ resource.subject || '未分类' }}</span>
-            <span>{{ getFileSize(resource.file_size) }}</span>
-            <span>{{ formatDate(resource.created_at) }}</span>
-            <span v-if="resource.indexed_at" class="indexed-badge">已索引</span>
-          </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="🤖 AI资料检索" name="chat">
+        <div class="chat-container">
+          <ResourceChat ref="resourceChatRef" />
         </div>
-        <div class="resource-actions">
-          <el-button type="text" size="small" @click.stop="openDocument(resource)" title="打开">
-            <el-icon><View /></el-icon>
-          </el-button>
-          <el-button type="text" size="small" @click.stop="openResourceDetail(resource)" title="详情">
-            <el-icon><InfoFilled /></el-icon>
-          </el-button>
-          <el-button type="text" size="small" @click.stop="handleDelete(resource.id)" title="删除">
-            <el-icon><Delete /></el-icon>
-          </el-button>
-        </div>
-      </el-card>
-    </div>
-    <div v-else class="empty-tip">
-      <el-icon><FolderOpened /></el-icon>暂无资料，点击上方按钮上传
-    </div>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog
       v-model="showDetail"
@@ -296,6 +204,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, View, InfoFilled, Delete, FolderOpened, DataLine, Connection } from '@element-plus/icons-vue'
+import ResourceChat from './recitation/ResourceChat.vue'
 import { marked } from 'marked'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -305,16 +214,17 @@ marked.setOptions({
   gfm: true
 })
 import {
-  uploadDocument, getDocuments, deleteDocument, getKnowledgeStatus, indexDocument, cancelIndexDocument, ragChat, getDocumentDownloadUrl,
-  type RAGDocument, type KnowledgeStatus, type RAGChatResult
+  uploadDocument, getDocuments, deleteDocument, getKnowledgeStatus, indexDocument, cancelIndexDocument, getDocumentDownloadUrl, getDocumentPreviewUrl,
+  type RAGDocument, type KnowledgeStatus
 } from '../api/rag'
 
 // 学科列表（与推荐模块保持一致）
 const SUBJECTS = ['数学', '英语', '政治', '马原', '毛中特', '史纲', '思修', '时政', '专业课']
 
+const activeTab = ref('files')
 const resources = ref<RAGDocument[]>([])
 const searchQuery = ref('')
-const knowledgeSearchQuery = ref('')
+const resourceChatRef = ref<InstanceType<typeof ResourceChat> | null>(null)
 const filterSubject = ref<string>('')           // 文件列表筛选学科
 const knowledgeSearchSubject = ref<string>('')  // 知识点搜索筛选学科
 const uploadSubject = ref<string>('未分类')      // 上传时选择的学科
@@ -622,82 +532,14 @@ function renderMarkdown(text: string): string {
   return result
 }
 
-async function handleKnowledgeSearch() {
-  if (!knowledgeSearchQuery.value.trim()) {
-    ElMessage.warning('请输入搜索词')
-    return
-  }
-
-  knowledgeSearchLoading.value = true
-  knowledgeSearchProgress.value = 0
-  knowledgeSearchProgressMessage.value = '正在准备搜索...'
-  showKnowledgeSearchResult.value = false
-  knowledgeSearchSource.value = null
-  showAllSources.value = false
-  expandedSourceIndexes.value.clear()
-  
-  const progressSteps = [
-    { progress: 10, message: '正在向量化查询...' },
-    { progress: 30, message: '正在检索知识库...' },
-    { progress: 50, message: '正在匹配相关内容...' },
-    { progress: 70, message: '正在生成回答...' },
-    { progress: 90, message: '正在整理结果...' },
-  ]
-  
-  try {
-    for (const step of progressSteps) {
-      await new Promise(resolve => setTimeout(resolve, 200))
-      knowledgeSearchProgress.value = step.progress
-      knowledgeSearchProgressMessage.value = step.message
-    }
-    
-    const result: RAGChatResult = await ragChat(
-      knowledgeSearchQuery.value.trim(),
-      5,
-      0.5,
-      knowledgeSearchSubject.value || undefined,
-      true
-    )
-    
-    knowledgeSearchProgress.value = 100
-    knowledgeSearchProgressMessage.value = '搜索完成'
-    
-    knowledgeSearchAnswer.value = result.answer || '暂无回答'
-    knowledgeSearchSource.value = result.source || null
-    knowledgeSearchSources.value = (result.relevant_chunks || []).map((item, idx) => ({
-      content: item.content || '',
-      filename: item.metadata?.filename || '未知文件',
-      similarity: item.similarity || 0,
-      subject: item.metadata?.subject || undefined,
-      chunkIndex: item.metadata?.chunk_index || (idx + 1),
-      totalChunks: item.metadata?.total_chunks || undefined
-    }))
-    showKnowledgeSearchResult.value = true
-    resources.value = []
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '搜索失败')
-  } finally {
-    knowledgeSearchLoading.value = false
-    setTimeout(() => {
-      knowledgeSearchProgress.value = 0
-      knowledgeSearchProgressMessage.value = ''
-    }, 500)
-  }
-}
-
-function closeKnowledgeSearch() {
-  showKnowledgeSearchResult.value = false
-  knowledgeSearchAnswer.value = ''
-  knowledgeSearchSource.value = null
-  knowledgeSearchSources.value = []
-  showAllSources.value = false
-  expandedSourceIndexes.value.clear()
-  loadResources()
-}
-
 function openDocument(resource: RAGDocument) {
-  const url = getDocumentDownloadUrl(resource.id)
-  window.open(url, '_blank')
+  if (resource.file_type === 'pdf') {
+    const url = getDocumentPreviewUrl(resource.id)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } else {
+    const url = getDocumentDownloadUrl(resource.id)
+    window.open(url, '_blank')
+  }
 }
 
 function openResourceDetail(resource: RAGDocument) {
@@ -817,7 +659,7 @@ onMounted(() => {
 <style scoped>
 .resources-page {
   padding: 20px;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
 }
 
@@ -831,6 +673,18 @@ onMounted(() => {
 .page-header h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.resources-tabs {
+  margin-top: 10px;
+}
+
+.resources-tabs :deep(.el-tabs__content) {
+  padding: 20px 0;
+}
+
+.chat-container {
+  min-height: 600px;
 }
 
 .status-card {

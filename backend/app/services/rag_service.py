@@ -70,7 +70,18 @@ class RAGService:
         self.timeout = settings.AI_TIMEOUT
 
     def chat(self, user_id: int, question: str, top_k: int = 3, threshold: float = 0.3, ai_config: dict = None, subject: str = None, only_knowledge_base: bool = False) -> dict:
-        effective_threshold = 0.15 if only_knowledge_base else threshold
+        from ..agents.base import agent_registry
+        
+        # 检查资料检索智能体是否启用
+        if not agent_registry.is_agent_enabled('rag_agent'):
+            return {
+                "answer": "资料检索功能已被停用。请前往首页，在「智能体状态」中开启「资料检索助手」。",
+                "source": None,
+                "relevant_chunks": [],
+                "from_knowledge_base": False
+            }
+        
+        effective_threshold = 0.05 if only_knowledge_base else threshold
         relevant_chunks = knowledge_base_service.search(user_id, question, top_k, effective_threshold, subject=subject, enable_keyword_fallback=True)
         
         from_knowledge_base = len(relevant_chunks) > 0
@@ -93,9 +104,9 @@ class RAGService:
         
         if only_knowledge_base:
             max_similarity = max(chunk.get("similarity", 0) for chunk in relevant_chunks)
-            if max_similarity < 0.2:
+            if max_similarity < 0.15:
                 return {
-                    "answer": "未从您的资料中找到相关内容，请尝试其他关键词或上传更多资料。",
+                    "answer": "从您的资料中检索到的内容相关性较低，建议尝试更精确的关键词或上传更多相关资料。",
                     "source": None,
                     "relevant_chunks": relevant_chunks,
                     "from_knowledge_base": False
@@ -131,27 +142,15 @@ class RAGService:
             prompt = f"请回答以下考研相关问题：\n\n{question}\n\n如果这个问题超出你的知识范围，请明确说明。"
             system_prompt = "你是一个专业的考研复习助手，精通考研各科目知识。"
 
-        if ai_config and ai_config.get("api_key"):
-            return llm_service.chat_single_turn(
-                user_message=prompt,
-                ai_config=ai_config,
-                system_prompt=system_prompt,
-                temperature=0.3 if strict_mode else 0.7,
-            )
-        else:
-            default_config = {
-                "api_key": settings.AI_API_KEY,
-                "base_url": settings.AI_BASE_URL,
-                "model": settings.AI_MODEL,
-            }
-            if not default_config["api_key"]:
-                raise ValueError("未配置AI服务，请先在AI配置页面设置API Key")
-            return llm_service.chat_single_turn(
-                user_message=prompt,
-                ai_config=default_config,
-                system_prompt=system_prompt,
-                temperature=0.3 if strict_mode else 0.7,
-            )
+        if not ai_config or not ai_config.get("api_key"):
+            raise ValueError("未配置AI服务，请先在AI配置页面设置API Key")
+
+        return llm_service.chat_single_turn(
+            user_message=prompt,
+            ai_config=ai_config,
+            system_prompt=system_prompt,
+            temperature=0.3 if strict_mode else 0.7,
+        )
 
 
 rag_service = RAGService()

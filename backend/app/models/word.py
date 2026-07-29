@@ -28,5 +28,8 @@ class UserWord(Base):
     review_count = Column(Integer, nullable=False, default=0)
     correct_count = Column(Integer, nullable=False, default=0)
     last_study_date = Column(DateTime(timezone=True), nullable=True)
-    
+    first_study_date = Column(Date, nullable=True)
+    last_rating = Column(String(20), nullable=True)
+    srs_stage = Column(Integer, nullable=False, default=0)
+
     word = relationship("Word", lazy="joined")

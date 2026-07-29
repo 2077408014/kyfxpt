@@ -72,37 +72,6 @@
     </div>
 
     <div class="section">
-      <h3>智能体状态</h3>
-      <div v-if="agents.length > 0" class="agents-grid">
-        <el-card
-          v-for="agent in agents"
-          :key="agent.name"
-          class="agent-card"
-          :class="{ 'agent-disabled': !agent.enabled }"
-        >
-          <div class="agent-header">
-            <div class="agent-info">
-              <div class="agent-name">{{ agent.domain }}</div>
-              <div class="agent-label">{{ agent.name }}</div>
-            </div>
-            <el-switch
-              v-model="agent.enabled"
-              @change="handleToggleAgent(agent.name, agent.enabled)"
-              :disabled="loading"
-            />
-          </div>
-          <div class="agent-keywords">
-            <el-tag v-for="kw in agent.keywords.slice(0, 3)" :key="kw" size="small">{{ kw }}</el-tag>
-            <span v-if="agent.keywords.length > 3" class="more-keywords">+{{ agent.keywords.length - 3 }}</span>
-          </div>
-        </el-card>
-      </div>
-      <div v-else class="empty-tip">
-        <el-icon><InfoFilled /></el-icon>暂无智能体信息
-      </div>
-    </div>
-
-    <div class="section">
       <h3>薄弱知识点分析</h3>
       <div v-if="weakPoints.length > 0" class="weak-points-list">
         <el-tag
@@ -230,10 +199,10 @@ import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import {
   analyzeWeakPoints, generateRecommendations, getRecommendations,
-  completeRecommendation, getRecommendationReport, getAgentStatus,
-  toggleAgent, getCollaborationLogs, deleteRecommendation,
+  completeRecommendation, getRecommendationReport,
+  getCollaborationLogs, deleteRecommendation,
   type Recommendation, type WeakPoint, type RecommendationReport,
-  type AgentInfo, type CollaborationStats
+  type CollaborationStats
 } from '../api/recommendation'
 
 function renderLatex(text: string): string {
@@ -399,13 +368,16 @@ const report = reactive<RecommendationReport>({
   weak_points: []
 })
 const showAnswers = reactive<Record<number, boolean>>({})
-const agents = ref<AgentInfo[]>([])
 const collaborationStats = reactive<CollaborationStats>({
   total_collaborations: 0,
   success_rate: 0,
   avg_response_time_ms: 0
 })
 const loading = ref(false)
+const generating = ref(false)
+const generateProgress = ref(0)
+const generateStatus = ref<'success' | 'exception' | 'warning' | undefined>(undefined)
+const generateMessage = ref('')
 const selectedSubject = ref('')
 const deletingIds = reactive<Set<number>>(new Set())
 
@@ -433,9 +405,6 @@ async function loadData() {
     const data = await getRecommendationReport()
     Object.assign(report, data)
     
-    const agentData = await getAgentStatus()
-    agents.value = agentData.agents
-    
     const logData = await getCollaborationLogs()
     Object.assign(collaborationStats, logData.stats)
   } catch {
@@ -443,32 +412,30 @@ async function loadData() {
   }
 }
 
-async function handleToggleAgent(agentName: string, enabled: boolean) {
-  loading.value = true
-  try {
-    const result = await toggleAgent(agentName, enabled)
-    ElMessage.success(result.message)
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '操作失败')
-    const idx = agents.value.findIndex(a => a.name === agentName)
-    if (idx !== -1) {
-      agents.value[idx].enabled = !enabled
-    }
-  } finally {
-    loading.value = false
-  }
-}
-
 async function handleGenerate() {
+  generating.value = true
+  generateProgress.value = 0
+  generateStatus.value = undefined
+  generateMessage.value = '正在分析薄弱知识点...'
   try {
     const subject = selectedSubject.value || undefined
+    generateMessage.value = '正在生成推荐题目（AI处理中，请耐心等待）...'
+    generateProgress.value = 30
     const newRecs = await generateRecommendations(5, subject)
+    generateProgress.value = 90
     recommendations.value = [...newRecs, ...recommendations.value]
     const data = await getRecommendationReport()
     Object.assign(report, data)
+    generateProgress.value = 100
+    generateStatus.value = 'success'
+    generateMessage.value = '生成完成'
     ElMessage.success(`成功生成 ${newRecs.length} 道推荐题目`)
   } catch (error: any) {
+    generateStatus.value = 'exception'
+    generateMessage.value = '生成失败'
     ElMessage.error(error.response?.data?.detail || '生成失败')
+  } finally {
+    generating.value = false
   }
 }
 
@@ -541,6 +508,25 @@ onMounted(loadData)
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.generate-progress {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.progress-text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.progress-message {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #909399;
+  text-align: center;
 }
 
 .subject-select {
@@ -701,55 +687,5 @@ onMounted(loadData)
   border-radius: 8px;
   color: #909399;
   justify-content: center;
-}
-
-.agents-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 16px;
-}
-
-.agent-card {
-  padding: 16px;
-  transition: all 0.3s;
-}
-
-.agent-card.agent-disabled {
-  opacity: 0.6;
-  background: #f5f5f5;
-}
-
-.agent-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
-}
-
-.agent-info {
-  flex: 1;
-}
-
-.agent-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
-}
-
-.agent-label {
-  font-size: 12px;
-  color: #909399;
-}
-
-.agent-keywords {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.more-keywords {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 2px;
 }
 </style>

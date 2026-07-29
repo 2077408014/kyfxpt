@@ -25,6 +25,9 @@ export interface UserWord {
   review_count: number
   correct_count: number
   last_study_date: string | null
+  first_study_date: string | null
+  last_rating: string | null
+  srs_stage: number
 }
 
 export interface WordStats {
@@ -33,15 +36,14 @@ export interface WordStats {
   mastered: number
   today: number
   has_wordbook?: boolean
+  review_due?: number
 }
 
 export interface StudyPlan {
   daily_word_count: number
   word_category: string | null
-}
-
-export async function getWordStats(category?: string): Promise<WordStats> {
-  return await axios.get('/words/stats', { params: category ? { category } : {} })
+  batch_size: number
+  study_mode: string
 }
 
 export interface TodayWordsResponse {
@@ -50,6 +52,35 @@ export interface TodayWordsResponse {
   review_count: number
   new_count: number
   total_today: number
+}
+
+export interface StudySession {
+  current_round: number
+  total_rounds: number
+  round_queue: RoundQueueItem[]
+  round_stats: { known: number; vague: number; unknown: number }
+  global_index: number
+  total_words_today: number
+  study_mode: string
+  batch_size: number
+  all_word_ids: number[]
+  completed_rounds: number
+  category: string | null
+}
+
+export interface RoundQueueItem {
+  wordId: number
+  word: string
+  phonetic: string | null
+  meaning: string
+  example_sentence: string | null
+  exam_requirement: string
+  type: string
+  repeatCount: number
+}
+
+export async function getWordStats(category?: string): Promise<WordStats> {
+  return await axios.get('/words/stats', { params: category ? { category } : {} })
 }
 
 export async function getTodayWords(count: number = 20, category?: string): Promise<TodayWordsResponse> {
@@ -90,8 +121,31 @@ export async function getStudyPlan(): Promise<StudyPlan> {
   return await axios.get('/words/plan')
 }
 
-export async function saveStudyPlan(dailyWordCount: number, wordCategory?: string): Promise<StudyPlan> {
-  return await axios.post('/words/plan', { daily_word_count: dailyWordCount, word_category: wordCategory })
+export async function saveStudyPlan(
+  dailyWordCount: number,
+  wordCategory?: string,
+  batchSize?: number,
+  studyMode?: string
+): Promise<StudyPlan> {
+  return await axios.post('/words/plan', {
+    daily_word_count: dailyWordCount,
+    word_category: wordCategory,
+    batch_size: batchSize ?? 20,
+    study_mode: studyMode ?? 'mixed'
+  })
+}
+
+export async function getStudySession(): Promise<StudySession | null> {
+  const res: any = await axios.get('/words/session')
+  return res && Object.keys(res).length > 0 ? (res as StudySession) : null
+}
+
+export async function saveStudySession(session: StudySession): Promise<StudySession> {
+  return await axios.post('/words/session', session)
+}
+
+export async function clearStudySession(): Promise<{ success: boolean }> {
+  return await axios.delete('/words/session')
 }
 
 export interface UploadWordbookResult {

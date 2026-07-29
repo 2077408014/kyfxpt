@@ -64,30 +64,39 @@ async def index_document(
     async def run_index():
         try:
             def progress_callback(progress: int, message: str):
-                if index_progress[progress_key]["status"] == "cancelled":
+                if progress_key not in index_progress or index_progress[progress_key]["status"] == "cancelled":
                     raise Exception("索引已取消")
                 index_progress[progress_key] = {"progress": progress, "message": message, "status": "running"}
             
-            db_session = next(get_db())
-            try:
-                success = await asyncio.to_thread(
-                    knowledge_base_service.index_document,
-                    db_session, current_user.id, document_id, progress_callback
-                )
-                
-                if not success:
-                    index_progress[progress_key]["status"] = "failed"
-                    return
-                
-                if index_progress[progress_key]["status"] == "cancelled":
-                    return
-                
-                index_progress[progress_key] = {"progress": 100, "message": "索引创建成功", "status": "completed"}
-            finally:
-                db_session.close()
+            # 在异步任务中创建新的数据库会话
+            def run_index_sync():
+                db_session = next(get_db())
+                try:
+                    return knowledge_base_service.index_document(
+                        db_session, current_user.id, document_id, progress_callback
+                    )
+                finally:
+                    db_session.close()
+            
+            success = await asyncio.to_thread(run_index_sync)
+            
+            if not success:
+                index_progress[progress_key]["status"] = "failed"
+                index_progress[progress_key]["message"] = "索引失败"
+                return
+            
+            if progress_key in index_progress and index_progress[progress_key]["status"] == "cancelled":
+                return
+            
+            index_progress[progress_key] = {"progress": 100, "message": "索引创建成功", "status": "completed"}
         except Exception as e:
-            if progress_key in index_progress and index_progress[progress_key]["status"] != "cancelled":
-                index_progress[progress_key] = {"progress": 0, "message": str(e), "status": "failed"}
+            error_msg = str(e)
+            print(f"Index task failed: {error_msg}")
+            if "取消" in error_msg or "cancelled" in error_msg.lower():
+                if progress_key in index_progress:
+                    index_progress[progress_key] = {"progress": 0, "message": "用户已取消索引", "status": "cancelled"}
+            elif progress_key in index_progress and index_progress[progress_key]["status"] != "cancelled":
+                index_progress[progress_key] = {"progress": 0, "message": error_msg, "status": "failed"}
     
     asyncio.create_task(run_index())
     
@@ -167,6 +176,7 @@ async def get_document(
 async def download_document(
     document_id: int,
     token: str = None,
+    preview: bool = False,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user_from_query)
 ):
@@ -179,6 +189,24 @@ async def download_document(
         raise HTTPException(status_code=404, detail="文件不存在")
     
     filename = document.get("filename", "document")
+    file_type = document.get("file_type", "").lower()
+    
+    if preview and file_type == "pdf":
+        from fastapi.responses import Response
+        with open(storage_path, "rb") as f:
+            content = f.read()
+        headers = {
+            "Content-Disposition": "inline",
+            "Content-Length": str(len(content)),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "max-age=3600",
+        }
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers=headers
+        )
+    
     return FileResponse(
         storage_path,
         media_type="application/octet-stream",

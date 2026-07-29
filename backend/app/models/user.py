@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from ..database import Base
@@ -13,6 +13,9 @@ class User(Base):
     avatar = Column(String(255), nullable=True)
     daily_word_count = Column(Integer, nullable=False, default=20)
     selected_word_category = Column(String(50), nullable=True)
+    batch_size = Column(Integer, nullable=False, default=20)
+    study_mode = Column(String(20), nullable=False, default="mixed")
+    study_session_json = Column(Text, nullable=True)
     ai_api_key = Column(String(500), nullable=True)
     ai_api_base_url = Column(String(255), nullable=True)
     ai_api_model = Column(String(100), nullable=True)
